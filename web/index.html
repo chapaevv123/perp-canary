@@ -44,6 +44,10 @@
     <form id="diagnosticsForm"><label>Connected EOA<input id="diagnosticEoa" class="mono" placeholder="0x… public address"></label><label>dreamDEX trading wallet (optional)<input id="diagnosticTrading" class="mono" placeholder="0x… public address"></label><label class="wide">Existing dreamDEX tx hash (optional)<input id="diagnosticTx" class="mono" placeholder="0x…"></label><button class="secondary wide" type="submit">Inspect wallet architecture</button></form>
     <div id="diagnosticsOutput" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · No wallet relationship has been verified.</div><div id="diagnosticsFacts" class="empty">Each address will be reported separately with its source.</div>
   </section>
+  <section class="panel" id="networkFunding"><h2>Network &amp; Funding Intelligence</h2><p class="sub">Public read-only checks by network and address. App labels are reported separately from chain evidence.</p>
+    <form id="fundingForm"><label>Login wallet / external EOA<input id="fundingEoa" class="mono" placeholder="0x… public address"></label><label>dreamDEX Wallet 1 / trading wallet<input id="fundingTrading" class="mono" placeholder="0x… public address"></label><label>Reported app amount (optional)<input id="fundingAmount" inputmode="decimal" placeholder="26.306836"></label><label>Reported app symbol (optional)<input id="fundingSymbol" placeholder="SOMI"></label><button class="secondary wide" type="submit">Inspect networks and funding</button></form>
+    <div id="fundingState" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · Run a read-only inspection.</div><div id="fundingResults"></div>
+  </section>
   <section class="panel"><h2>Evidence Explorer</h2><p class="sub">Plans and reconciliations use a separate local SHA-256 chain. Wallet-linked records stay on this machine and are excluded from Git.</p><div id="records" class="empty">No execution evidence yet.</div></section>
 </main>
 <script>
@@ -63,5 +67,6 @@ $('diagnosticsForm').onsubmit=async event=>{event.preventDefault();const out=$('
 loadOverview();loadRecords();
 </script>
 <script src="/wallet.js"></script>
+<script src="/funding.js"></script>
 </body>
 </html>

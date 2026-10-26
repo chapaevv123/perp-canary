@@ -33,3 +33,21 @@ test('JSON errors and malformed JSON have clear status', async () => {
   const malformed = await reader(200, 'application/json', '<broken>');
   await assert.rejects(malformed.read('/api/v1/wallet-diagnostics'), /invalid JSON \(HTTP 200\)/);
 });
+
+test('funding view rejects HTML and JSON HTTP errors before rendering balances', async () => {
+  const script = await readFile('web/funding.js', 'utf8');
+  const source = script.match(/ {2}async function readFundingJson\(options\) \{[\s\S]*?\n {2}\}/)?.[0];
+  assert.ok(source);
+  const window: { read?: (options: unknown) => Promise<unknown> } = {};
+  let parsed = 0;
+  const fetch = async () => ({ status: 404, ok: false, headers: { get: () => 'text/html' },
+    text: async () => { parsed++; return '<html>old server</html>'; } });
+  runInNewContext(`${source}\nwindow.read=readFundingJson`, { window, fetch });
+  await assert.rejects(window.read!({ method: 'POST' }), /non-JSON HTTP 404/);
+  assert.equal(parsed, 0);
+  const errorWindow: { read?: (options: unknown) => Promise<unknown> } = {};
+  const jsonFetch = async () => ({ status: 503, ok: false, headers: { get: () => 'application/json' },
+    text: async () => '{"error":"RPC read unavailable"}' });
+  runInNewContext(`${source}\nwindow.read=readFundingJson`, { window: errorWindow, fetch: jsonFetch });
+  await assert.rejects(errorWindow.read!({ method: 'POST' }), /RPC read unavailable/);
+});

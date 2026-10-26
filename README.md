@@ -10,6 +10,8 @@ Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and che
 
 **M2.2 wallet audit:** Read-only Wallet Architecture Diagnostics now separates the connected EOA from a user-supplied dreamDEX trading wallet, reads each address's Hideki balances, MarginBank state, position and indexed orders, and inspects an existing transaction hash for pool owner events. Missing account links remain `UNKNOWN`. The M2 direct EOA order path does not sign for an app-managed wallet. See [wallet architecture audit](docs/wallet-architecture-audit.md).
 
+**M2.4 network and funding:** The existing dashboard now checks public EOA and trading-wallet balances independently on Hideki 50383, Shannon 50312 and mainnet 5031, verifies each RPC's chain ID, and explains funding readiness, official test routes and unresolved app balances. A LIVE sample found the owner-reported `26.306836 SOMI` amount as a numerical match to Shannon EOA **STT**, while the supplied trading address held Hideki STT and a 1000 USDso MarginBank voucher floor. This does not prove the app token label or account link. See [network and funding intelligence](docs/network-funding-intelligence.md).
+
 ## How it works
 
 ```text

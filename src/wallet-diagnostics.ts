@@ -78,6 +78,20 @@ export async function inspectWalletArchitecture(input: { eoa?: string; tradingAc
           order.market.poolAddress.toLowerCase() === market.poolAddress.toLowerCase()).length),
         `Markets SDK indexed getPerpPortfolio; selected pool; up to 50 open orders; may lag chain`))
         .catch(() => unknown('Indexer portfolio read failed; no zero-order claim'));
+      const voucher = role === 'TRADING_ACCOUNT' ? await Promise.allSettled([
+        sdk.client.getPerpVoucherEligibility(market.marginBank, account),
+        sdk.client.getPerpVoucher(market.marginBank, account),
+      ]) : null;
+      const voucherEligibility: Fact = voucher?.[0].status === 'fulfilled'
+        ? confirmed(voucher[0].value.eligible
+          ? `ELIGIBLE; grant ${formatUnits(voucher[0].value.grantAmount, market.quoteDecimals)} USDso`
+          : `INELIGIBLE; ${voucher[0].value.reason}`,
+        `Markets SDK getPerpVoucherEligibility; MarginBank ${market.marginBank}`)
+        : unknown('Voucher eligibility was not read for this address or SDK read failed');
+      const voucherFloor: Fact = voucher?.[1].status === 'fulfilled'
+        ? confirmed(formatUnits(voucher[1].value?.floor ?? 0n, market.quoteDecimals),
+          `Markets SDK getPerpVoucher; MarginBank ${market.marginBank}`)
+        : unknown('Voucher floor was not read for this address or SDK read failed');
       accounts.push({ role, address, gasStt: confirmed(formatUnits(gas, 18), 'Hideki eth_getBalance for this address'),
         walletUsdso: confirmed(formatUnits(walletUsdso, market.quoteDecimals), 'USDso ERC-20 balanceOf for this address'),
         marginBankUnlocked: confirmed(formatUnits(margin.unlockedCollateralBalance, market.quoteDecimals),
@@ -88,6 +102,7 @@ export async function inspectWalletArchitecture(input: { eoa?: string; tradingAc
           `Markets SDK getPerpPosition; pool ${market.poolAddress}`),
         activePerpPools: confirmed(margin.activePerpPools.length ? margin.activePerpPools.join(', ') : 'none',
           `Markets SDK getMarginAccount; active perp pools across markets; block ${margin.asOfBlock}`),
+        voucherEligibility, voucherFloor,
         openOrdersObserved: portfolio,
         marginStatus: confirmed(margin.marginStatus, `Markets SDK getMarginAccount; block ${margin.asOfBlock}`),
       });
