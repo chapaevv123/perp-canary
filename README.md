@@ -1,8 +1,10 @@
 # Perp Canary
 
-Perp Canary is a read-only evidence collector for dreamDEX perpetual markets on Somnia Hideki testnet. It uses the official `@somnia-chain/markets-sdk` package to observe market rows, system wiring, factory pool status, and each pool's mark feed. It saves canonical JSON snapshots in a SHA-256 linked chain and serves the verified files through a local web view and API.
+Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and checks whether a real transaction receipt matches a saved, read-only order plan. It uses the official `@somnia-chain/markets-sdk` for market, feed, account and risk reads. The app never signs or sends a transaction.
 
-**M0 status (26 October 2026):** SDK `0.32.1`, Hideki chain ID `50383`, and RPC/WSS connectivity were checked in a complete `host-m0.ps1` run. Three `LIVE` snapshots are included. The latest records 21 markets at block `33751413`; all 21 received a feed-only `GREEN` verdict at observation time. Six tests, TypeScript typecheck, ESLint, and evidence verification passed after the snapshot process exited. This project has no order execution path, confirmed whitelist, or public deployment.
+**M0 evidence (26 October 2026):** SDK `0.32.1`, Hideki chain ID `50383`, and RPC/WSS connectivity were checked in a complete `host-m0.ps1` run. Three `LIVE` snapshots are included. The latest records 21 markets at block `33751413`; all 21 received a feed-only `GREEN` verdict at observation time.
+
+**M1 development:** The existing local app now offers live dry-run plans for place, cancel and close operations, and can compare an existing Hideki receipt with a plan. These paths have local tests. No owner wallet, actual order, cancel, close, or receipt has been exercised through this M1 flow yet. The contest whitelist and submission eligibility remain unconfirmed.
 
 ## How it works
 
@@ -37,7 +39,7 @@ npm.cmd test
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-m0.ps1
 ```
 
-`host-m0.ps1` inspects the installed SDK exports, checks RPC chain ID `50383` and WSS, writes a fresh read-only snapshot, then runs typecheck, lint, tests, and `verify`. The separate `npm.cmd run snapshot` command performs only collection. `npm.cmd run serve` starts the local view at `http://127.0.0.1:8787` with `/api/v1/snapshots`, `/api/v1/latest`, `/api/v1/health`, and `/api/v1/gate`.
+`host-m0.ps1` inspects the installed SDK exports, checks RPC chain ID `50383` and WSS, writes a fresh read-only snapshot, then runs typecheck, lint, tests, and `verify`. The separate `npm.cmd run snapshot` command performs only collection. `npm.cmd run serve` starts the local view at `http://127.0.0.1:8787`. Its M1 forms run read-only SDK preflight and inspect a transaction hash supplied by the user. See [Execution Integrity](docs/execution-integrity.md) for the exact API and manual workflow.
 
 | Included snapshot (UTC) | Block | Markets | Feed verdicts | SHA-256 head |
 | --- | ---: | ---: | --- | --- |
@@ -51,6 +53,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-m0.ps1
 
 `GREEN` says only that the observed pool feed reported `markPriceOk`, a nonzero mark, and an index timestamp. `AMBER` means the timestamp was unavailable; `RED` means a confirmed failed or zero mark; `UNKNOWN` means the read failed or its shape was invalid. `/api/v1/gate` remains `UNKNOWN` because execution availability and order conformance are not measured.
 
-Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. Perp Canary does not place orders, manage a wallet, or send transactions. Whitelist access and bounty eligibility remain unconfirmed.
+Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. Perp Canary does not place orders or send transactions. Whitelist access and bounty eligibility remain unconfirmed.
 
 See [architecture](docs/architecture.md) for the data flow. Perp Canary is independent of dreamDEX and Somnia. Original Perp Canary code is licensed under [MIT](LICENSE).

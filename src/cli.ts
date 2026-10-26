@@ -12,7 +12,10 @@ try {
       gateCounts: Object.fromEntries(['GREEN', 'AMBER', 'RED', 'UNKNOWN'].map(gate => [gate, body.markets.filter(m => m.gate === gate).length])) }, null, 2));
   } else if (command === 'verify') {
     const snapshots = await readSnapshots(dir);
-    console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null }, null, 2));
+    const { readExecutionRecords } = await import('./execution-evidence.ts');
+    const execution = await readExecutionRecords(resolve('execution-evidence'));
+    console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null,
+      executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null }, null, 2));
   } else {
     throw new Error('Usage: npm run snapshot | npm run verify');
   }

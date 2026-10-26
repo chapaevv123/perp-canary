@@ -19,3 +19,4 @@ secrets/
 *.sqlite3
 *.tsbuildinfo
 test-results/
+execution-evidence/
