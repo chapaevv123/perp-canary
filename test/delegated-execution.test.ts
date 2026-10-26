@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { encodeFunctionData, keccak256, parseUnits, type Hex } from 'viem';
-import { buildPreparedPlan, PLACE_ABI, verifyPreparedPlan } from '../src/delegated-plan.ts';
+import { buildPreparedPlan, PLACE_ABI, positionEffect, verifyPreparedPlan } from '../src/delegated-plan.ts';
+import { appendBotPlanEvidence, readBotPlanEvidence } from '../src/bot-evidence.ts';
 import { assessExecutionPreflight, executeDelegatedPlan, type ExecutionPorts } from '../src/delegated-execution.ts';
 import { assessDelegatedTrade, readForensicEvidence, saveForensicEvidence } from '../src/delegated-forensics.ts';
 import { appendExecutionState, readAllExecutionLedgers, readExecutionLedger, reserveIntent } from '../src/execution-ledger.ts';
@@ -16,7 +17,8 @@ import type { inspectTradingAuthorization } from '../src/trading-authorization.t
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
 const input = { side: 'BUY' as const, price: '80000', quantity: '0.001' };
-function observation(changes: Record<string, unknown> = {}, order = input): Observation {
+function observation(changes: Record<string, unknown> = {},
+  order: { side: 'BUY' | 'SELL'; price: string; quantity: string } = input): Observation {
   const expiresAt = new Date(Date.now() + 120_000).toISOString();
   const data = encodeFunctionData({ abi: PLACE_ABI, functionName: 'placeOrderFor',
     args: [OWNER_TRADING_WALLET, order.side === 'BUY', 0n, parseUnits(order.price, 18),
@@ -38,7 +40,7 @@ function evidence(p: ReturnType<typeof plan>, options: { filled?: string; positi
   const qty = options.filled ?? parseUnits(p.quantity, 8).toString();
   const events: Array<Record<string, unknown>> = [{ eventName: 'OrderPlaced', address: p.pool,
     args: { orderId: '7', placedOrder: { owner: p.owner, fullQuantity: parseUnits(p.quantity, 8).toString(),
-      isBid: p.side === 'BUY' } } }];
+      price: parseUnits(p.price, 18).toString(), isBid: p.side === 'BUY' } } }];
   if (!options.noFill) events.push({ eventName: 'OrderFilled', address: p.pool,
     args: { takerOrderId: '7', quantityFilled: qty, fillPrice: parseUnits(p.price, 18).toString() } });
   if (!options.noFill) events.push({ eventName: 'PositionUpdated', address: p.pool,
@@ -210,5 +212,75 @@ test('forensic artifact stores reproducible source and detects tampering', async
     changed.source.chainId = 1;
     await writeFile(file, JSON.stringify(changed));
     await assert.rejects(readForensicEvidence(dir), /invalid/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('existing LONG is included in full-fill effect and opposite-side PLACE is blocked', () => {
+  const before = parseUnits('0.05416', 8).toString();
+  const p = buildPreparedPlan(observation({ positionSizeRaw: before }), input);
+  assert.equal(p.status, 'PREPARED');
+  assert.deepEqual(positionEffect('BUY', p.quantity, before), {
+    kind: 'INCREASE_LONG', afterFullFillRaw: parseUnits('0.05516', 8).toString(),
+  });
+  const after = parseUnits('0.05516', 8).toString();
+  assert.equal(assessDelegatedTrade(p, evidence(p, { position: after }), after).verdict, 'VERIFIED');
+  const sell = { side: 'SELL' as const, price: input.price, quantity: input.quantity };
+  const opposite = buildPreparedPlan(observation({ positionSizeRaw: before }, sell), sell);
+  assert.equal(opposite.status, 'BLOCKED');
+  assert.match(opposite.blockers.join(' '), /could reduce or flip/);
+});
+
+test('read-only dry run loads exact plan hash and stops before signing or broadcast', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-m35-dry-'));
+  const p = buildPreparedPlan(observation({ positionSizeRaw: parseUnits('0.05416', 8).toString() }), input);
+  let signed = 0;
+  let sent = 0;
+  try {
+    await appendBotPlanEvidence(join(dir, 'plans'), p);
+    const loaded = (await readBotPlanEvidence(join(dir, 'plans')))[0]?.plan;
+    assert.equal(loaded?.hash, p.hash);
+    assert.equal(loaded?.schema, 'perp-canary/delegated-plan/v2');
+    if (loaded?.schema !== 'perp-canary/delegated-plan/v2') throw Error('Wrong plan schema');
+    assert.equal(loaded.transaction?.data, p.transaction?.data);
+    assert.equal(loaded.owner, OWNER_TRADING_WALLET);
+    assert.equal(loaded.operator, BOT);
+    assert.equal(loaded.chainId, 50383);
+    assert.equal(loaded.pool.toLowerCase(), BTC_POOL.toLowerCase());
+    assert.equal(loaded.risk.gasLimit, p.risk.gasLimit);
+    const mock = ports(loaded, { fresh: async () => observation({ positionSizeRaw: loaded.positionSizeBeforeRaw }),
+      confirm: async () => false,
+      sign: async () => { signed++; throw Error('dry run must not sign'); },
+      broadcastOnce: async () => { sent++; throw Error('dry run must not broadcast'); } });
+    const outcome = await executeDelegatedPlan(loaded, mock, {
+      ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics'),
+    });
+    assert.equal(outcome.state, 'CANCELLED');
+    assert.equal(signed, 0);
+    assert.equal(sent, 0);
+    assert.deepEqual(await readExecutionLedger(join(dir, 'ledger'), p.intentId), []);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('forensics cannot verify absent events or unexplained position changes', () => {
+  const p = plan();
+  const missing = { ...evidence(p), decodedEvents: [] };
+  assert.equal(assessDelegatedTrade(p, missing, '0').verdict, 'AMBER');
+  assert.equal(assessDelegatedTrade(p, missing, '100000').verdict, 'RED');
+  assert.equal(assessDelegatedTrade(p, evidence(p, { noFill: true }), '1').verdict, 'RED');
+  const priced = evidence(p);
+  (priced.decodedEvents[0]?.args.placedOrder as Record<string, unknown>).price = '1';
+  assert.equal(assessDelegatedTrade(p, priced, '100000').verdict, 'RED');
+});
+
+test('receipt RPC timeout leaves UNKNOWN and the intent reserved', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-m35-timeout-'));
+  const p = plan();
+  try {
+    const result = await executeDelegatedPlan(p, ports(p, {
+      receiptAndForensics: async () => { throw Error('RPC timeout'); },
+    }), { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') });
+    assert.equal(result.state, 'UNKNOWN');
+    assert.equal((await readExecutionLedger(join(dir, 'ledger'), p.intentId)).at(-1)?.state, 'BROADCAST_ACCEPTED');
+    await assert.rejects(reserveIntent(join(dir, 'ledger'), p.intentId, p.hash), /EEXIST/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

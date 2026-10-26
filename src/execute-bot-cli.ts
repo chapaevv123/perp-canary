@@ -4,7 +4,7 @@ import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/ma
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { readBotKeystore, withUnlockedBotSigner } from './bot-keystore.ts';
 import { readBotPlanEvidence } from './bot-evidence.ts';
-import { verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
+import { positionEffect, verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
 import { assessExecutionPreflight, executeDelegatedPlan, type ExecutionPorts } from './delegated-execution.ts';
 import { readExecutionLedger, appendExecutionState } from './execution-ledger.ts';
 import { assessDelegatedTrade, saveForensicEvidence } from './delegated-forensics.ts';
@@ -145,6 +145,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ planHash: plan.hash, status: plan.status, chainId: plan.chainId,
     owner: plan.owner, operator: plan.operator, pool: plan.pool, side: plan.side,
     price: plan.price, quantity: plan.quantity, notionalWei: plan.risk.orderNotionalWei,
+    positionSizeBeforeRaw: plan.positionSizeBeforeRaw,
+    positionEffect: positionEffect(plan.side, plan.quantity, plan.positionSizeBeforeRaw),
     gasLimit: plan.risk.gasLimit, gasBudgetWei: plan.risk.maxGasCostWei,
     expiresAt: plan.expiresAt, blockers: plan.blockers }, null, 2));
   const ports: ExecutionPorts = {

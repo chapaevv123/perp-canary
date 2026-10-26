@@ -17,7 +17,7 @@ import { inspectBotConnection } from './bot-foundation.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
 import { readBotPlanEvidence } from './bot-evidence.ts';
-import { buildPreparedPlan } from './delegated-plan.ts';
+import { buildPreparedPlan, positionEffect } from './delegated-plan.ts';
 import { readExecutionLedger } from './execution-ledger.ts';
 import { readForensicEvidence } from './delegated-forensics.ts';
 import { buildOrderActionPlan, discoverBtcOrders, inspectOrderAction } from './order-actions.ts';
@@ -150,7 +150,10 @@ createServer(async (request, response) => {
         price: body.price, quantity: body.quantity });
       const plan = buildPreparedPlan(observation, { side: body.side, price: body.price, quantity: body.quantity });
       const record = await appendBotPlanEvidence(botEvidenceDir, plan);
-      json(response, 200, { ...plan, canary: assessPlanCanary(plan), evidenceHash: record.hash });
+      const effect = /^-?\d+$/.test(plan.positionSizeBeforeRaw) ?
+        positionEffect(plan.side, plan.quantity, plan.positionSizeBeforeRaw) : null;
+      json(response, 200, { ...plan, positionEffect: effect,
+        canary: assessPlanCanary(plan), evidenceHash: record.hash });
     } else if (request.method === 'GET' && path === '/api/v1/bot-orders') {
       const snapshot = await discoverBtcOrders();
       const signals: CanarySignal[] = [];

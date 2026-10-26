@@ -9,6 +9,16 @@ export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool is
 export const MAX_NOTIONAL_WEI = 100n * 10n ** 18n;
 export const MAX_GAS_LIMIT = 10_000_000n;
 export const MAX_GAS_COST_WEI = 100_000_000_000_000_000n; // 0.1 STT
+export function positionEffect(side: 'BUY' | 'SELL', quantity: string, beforeRaw: string): {
+  kind: 'INCREASE_LONG' | 'INCREASE_SHORT' | 'OPEN_LONG' | 'OPEN_SHORT' | 'REDUCE_OR_FLIP';
+  afterFullFillRaw: string } {
+  const before = BigInt(beforeRaw);
+  const delta = parseUnits(quantity, 8) * (side === 'BUY' ? 1n : -1n);
+  const kind = before * delta < 0n ? 'REDUCE_OR_FLIP' :
+    before > 0n ? 'INCREASE_LONG' : before < 0n ? 'INCREASE_SHORT' :
+      delta > 0n ? 'OPEN_LONG' : 'OPEN_SHORT';
+  return { kind, afterFullFillRaw: (before + delta).toString() };
+}
 export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'PREPARED' | 'BLOCKED';
   operation: 'PLACE'; chainId: 50383; owner: string; operator: string; pool: string;
   side: 'BUY' | 'SELL'; price: string; quantity: string; intentId: string;
@@ -64,6 +74,10 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
         quantity: input.quantity, expiresAt: unsigned.expiresAt }),
   };
   const blockers = [...observation.planBlockers];
+  try {
+    if (positionEffect(input.side, input.quantity, observation.positionSizeRaw).kind === 'REDUCE_OR_FLIP')
+      blockers.push('Opposite-side PLACE could reduce or flip an existing position; CLOSE_POSITION remains blocked');
+  } catch { blockers.push('Position effect unavailable'); }
   for (const [name, passed] of Object.entries(checks)) if (!passed) blockers.push(`${name} gate failed`);
   const failure = observation.simulationFailure as SimulationFailure | null;
   const diagnostic = failure ? {
@@ -100,6 +114,8 @@ export function verifyPreparedPlan(plan: PreparedPlan): void {
       BigInt(plan.risk.maxGasCostWei) === gasLimit * BigInt(plan.risk.gasPriceWei) &&
       BigInt(plan.risk.maxGasCostWei) <= MAX_GAS_COST_WEI &&
       /^-?\d+$/.test(plan.positionSizeBeforeRaw) && BigInt(plan.markPriceRaw) > 0n;
+    if (riskValid && positionEffect(plan.side, plan.quantity, plan.positionSizeBeforeRaw).kind === 'REDUCE_OR_FLIP')
+      riskValid = false;
   } catch { riskValid = false; }
   const expectedIntent = sha256({ chainId: 50383, owner: OWNER_TRADING_WALLET.toLowerCase(),
     operator: plan.operator.toLowerCase(), pool: BTC_POOL.toLowerCase(),
