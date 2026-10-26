@@ -55,7 +55,7 @@ test('browser wallet never sends automatically or after owner cancels', async ()
   assert.equal(app.calls.includes('eth_sendTransaction'), false);
   await (app.node('connectWallet').onclick as () => Promise<void>)();
   await (app.node('planForm').onsubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
-  assert.equal(app.node('reviewWallet').hidden, false);
+  assert.equal(app.node('reviewWallet').hidden, true);
   await (app.node('reviewWallet').onclick as () => Promise<void>)();
   assert.equal(app.calls.includes('eth_sendTransaction'), false);
 });
@@ -67,27 +67,24 @@ test('wrong wallet network prevents a send-ready plan', async () => {
   assert.equal(app.calls.includes('eth_sendTransaction'), false);
 });
 
-test('explicit owner and mocked wallet confirmation request a single transaction', async () => {
+test('even explicit owner approval cannot trigger a transaction in M2.6', async () => {
   const app = await harness(50383, true);
   await (app.node('connectWallet').onclick as () => Promise<void>)();
   await (app.node('planForm').onsubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
   await (app.node('reviewWallet').onclick as () => Promise<void>)();
-  assert.equal(app.calls.filter(call => call === 'eth_sendTransaction').length, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(app.sent[0])), {
-    from: '0x1111111111111111111111111111111111111111',
-    to: '0x2222222222222222222222222222222222222222',
-    data: '0x12345678', value: '0x0', gas: '0x989680', chainId: '0xc4cf',
-  });
+  assert.equal(app.calls.filter(call => call === 'eth_sendTransaction').length, 0);
+  assert.equal(app.sent.length, 0);
+  assert.match(String(app.node('sendState').textContent), /execution lock/i);
 });
 
 test('timeout on fresh preflight removes wallet review and makes no send request', async () => {
   const app = await harness(50383, true, 2);
   await (app.node('connectWallet').onclick as () => Promise<void>)();
   await (app.node('planForm').onsubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
-  assert.equal(app.node('reviewWallet').hidden, false);
+  assert.equal(app.node('reviewWallet').hidden, true);
   await (app.node('reviewWallet').onclick as () => Promise<void>)();
   assert.equal(app.node('reviewWallet').hidden, true);
-  assert.match(String(app.node('sendState').textContent), /RPC_TIMEOUT/);
+  assert.match(String(app.node('sendState').textContent), /execution lock/i);
   assert.equal(app.calls.includes('eth_sendTransaction'), false);
 });
 

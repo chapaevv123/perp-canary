@@ -11,12 +11,14 @@ import { inspectWalletArchitecture, WalletDiagnosticsReadError } from './wallet-
 import { collectFundingIntelligence } from './funding-intelligence.ts';
 import { collectTradeForensics } from './trade-forensics.ts';
 import { readTradeArtifacts } from './trade-evidence.ts';
+import { inspectTradingAuthorization, AuthorizationReadError } from './trading-authorization.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
 const forensicsJsPath = resolve('web/forensics.js');
+const authorizationJsPath = resolve('web/authorization.js');
 const tradeEvidenceDir = resolve('trade-evidence');
 const executionDir = resolve('execution-evidence');
 let refreshing = false;
@@ -99,6 +101,22 @@ createServer(async (request, response) => {
       const saved = (await readTradeArtifacts(tradeEvidenceDir))
         .find(artifact => artifact.txHash.toLowerCase() === result.txHash.toLowerCase());
       json(response, 200, { ...result, savedEvidenceHash: saved?.hash ?? null });
+    } else if (path === '/api/v1/trading-authorization' && request.method !== 'POST') {
+      json(response, 405, { error: 'Use POST /api/v1/trading-authorization with a JSON body' });
+    } else if (request.method === 'POST' && path === '/api/v1/trading-authorization') {
+      const body = await jsonBody(request);
+      if (body.side !== undefined && body.side !== '' && body.side !== 'BUY' && body.side !== 'SELL')
+        throw new Error('Side must be BUY or SELL');
+      const result = await inspectTradingAuthorization({
+        eoa: typeof body.eoa === 'string' ? body.eoa : undefined,
+        tradingWallet: typeof body.tradingWallet === 'string' ? body.tradingWallet : undefined,
+        operator: typeof body.operator === 'string' ? body.operator : undefined,
+        pool: typeof body.pool === 'string' ? body.pool : undefined,
+        side: body.side === 'BUY' || body.side === 'SELL' ? body.side : undefined,
+        price: typeof body.price === 'string' ? body.price : undefined,
+        quantity: typeof body.quantity === 'string' ? body.quantity : undefined,
+      });
+      json(response, 200, result);
     } else if (request.method === 'POST' && path === '/api/v1/reconcile') {
       const body = await jsonBody(request);
       const records = await readExecutionRecords(executionDir);
@@ -130,6 +148,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/forensics.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(forensicsJsPath));
+    } else if (request.method === 'GET' && path === '/authorization.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(authorizationJsPath));
     } else if (request.method === 'GET' && (path === '/api/v1/snapshots' || path === '/api/v1/latest')) {
       const history = await readSnapshots(evidenceDir);
       const value = path.endsWith('/latest') ? history.at(-1) ?? null : history;
@@ -155,6 +176,8 @@ createServer(async (request, response) => {
         transport: error.transport, attempts: error.attempts, retryable: true });
     } else if (error instanceof WalletDiagnosticsReadError) {
       json(response, 503, { error: error.message, code: 'WALLET_DIAGNOSTICS_UNAVAILABLE', phase: error.phase });
+    } else if (error instanceof AuthorizationReadError) {
+      json(response, 503, { error: error.message, code: 'AUTHORIZATION_READ_UNAVAILABLE', retryable: true });
     } else {
       json(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }

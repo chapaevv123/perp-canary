@@ -25,3 +25,7 @@ Run `npm.cmd run serve`, open the local page, connect MetaMask or Rabby on Hidek
 After a transaction, keep its hash and verify the receipt/evidence in Order Lifecycle. A GREEN verdict is bounded to fields observed by this verifier; it does not prove profit or whitelist status. Protocol fee and true slippage remain `NOT_MEASURED`; the position read can occur after the receipt block.
 
 Official references: [dreamDEX Hideki developer guide](https://app.testnet.dreamdex.io/docs/developers/perps-testnet) and [Somnia Markets SDK perp guide](https://prd.smk.somnia.host/docs/typescript/perps).
+
+## M2.6 status update
+
+The original M2 browser send path described above is disabled. M2.6 permits read-only preflight, unsigned construction and simulation only. Signing and broadcasting require separate M3 implementation and owner approval. See [trading authorization audit](trading-authorization-audit.md).
