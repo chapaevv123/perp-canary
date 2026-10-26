@@ -7,6 +7,8 @@ import { encryptBotKey, readBotKeystore, saveBotKeystore, unlockBotAddress, vali
 import { buildBotExecutionPlan, broadcastBotPlan, IntentReservations, signBotPlan, summarizeConnection } from '../src/bot-foundation.ts';
 import { appendBotPlanEvidence, readBotPlanEvidence } from '../src/bot-evidence.ts';
 import { localRequestRejection } from '../src/server-security.ts';
+import { canonicalBotAddress, comparePublicAddresses } from '../src/bot-address.ts';
+import { getAddress, isAddress } from 'viem';
 
 const fixtureKey = `0x${'11'.repeat(32)}` as const;
 const password = 'fixture-only-password-2026';
@@ -120,4 +122,27 @@ test('browser and HTTP control code contain no password input or signing endpoin
     const source = await readFile(path, 'utf8');
     assert.doesNotMatch(source, /eth_sendTransaction|eth_sendRawTransaction|signTransaction|unlockBotAddress|generatePrivateKey/);
   }
+});
+
+test('bot address command uses canonical EIP-55 public metadata', () => {
+  const stored = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
+  assert.equal(stored.length, 42);
+  assert.equal(isAddress(stored), true);
+  assert.equal(canonicalBotAddress(stored), getAddress(stored));
+  assert.equal(canonicalBotAddress(stored.toLowerCase()), stored);
+  assert.throws(() => canonicalBotAddress(`${stored}\u200b`), /plain 42-character/);
+});
+
+test('reported pasted address differs by a hex digit, beyond checksum case', () => {
+  const stored = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
+  const pasted = '0xA8ad1E44F4D74EF1fCDf479A97D54e6Bdf6F6E36';
+  const result = comparePublicAddresses(pasted, stored);
+  assert.equal(result.exactLength, true);
+  assert.equal(result.plainHex, true);
+  assert.equal(result.viemStrict, false);
+  assert.equal(result.viemNonStrict, true);
+  assert.equal(result.sameAddressIgnoringCase, false);
+  assert.deepEqual(result.differences.filter(diff => !diff.caseOnly),
+    [{ position: 39, entered: '6', expected: 'B', caseOnly: false }]);
+  assert.notEqual(getAddress(pasted), stored);
 });

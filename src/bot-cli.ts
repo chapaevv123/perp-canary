@@ -1,6 +1,7 @@
 import { stdin, stdout } from 'node:process';
 import { generatePrivateKey } from 'viem/accounts';
 import { BOT_KEYSTORE_PATH, encryptBotKey, readBotKeystore, saveBotKeystore, unlockBotAddress } from './bot-keystore.ts';
+import { canonicalBotAddress } from './bot-address.ts';
 
 async function hiddenPrompt(label: string): Promise<string> {
   if (!stdin.isTTY || !stdin.setRawMode || !stdout.isTTY) throw Error('Interactive local terminal required');
@@ -26,11 +27,15 @@ async function hiddenPrompt(label: string): Promise<string> {
 
 const command = process.argv[2];
 try {
-  if (process.argv.length !== 3) throw Error('Usage: npm run bot -- status|create|unlock');
+  if (process.argv.length !== 3) throw Error('Usage: npm run bot -- status|address|create|unlock');
   if (command === 'status') {
     const data = await readBotKeystore();
     console.log(JSON.stringify({ status: data ? 'LOCKED' : 'NOT_CONFIGURED', address: data?.address ?? null,
       chainId: 50383, path: BOT_KEYSTORE_PATH }));
+  } else if (command === 'address') {
+    const data = await readBotKeystore();
+    if (!data) throw Error('Bot keystore is NOT_CONFIGURED');
+    console.log(canonicalBotAddress(data.address));
   } else if (command === 'create') {
     if (await readBotKeystore()) throw Error('Bot keystore already exists; refusing replacement');
     const confirmation = await hiddenPrompt('Type CREATE HIDEKI BOT to create a new local key: ');
@@ -48,7 +53,7 @@ try {
     const password = await hiddenPrompt('Keystore password: ');
     console.log(JSON.stringify({ status: 'VALIDATED_AND_LOCKED', address: await unlockBotAddress(data, password),
       chainId: 50383, signing: 'DISABLED', broadcasting: 'DISABLED' }));
-  } else throw Error('Usage: npm run bot -- status|create|unlock');
+  } else throw Error('Usage: npm run bot -- status|address|create|unlock');
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Bot CLI failed');
   process.exitCode = 1;
