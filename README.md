@@ -66,3 +66,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-m0.ps1
 Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. M2.6 can produce an unsigned testnet PLACE order but cannot submit it. Whitelist access and bounty eligibility remain unconfirmed.
 
 See [architecture](docs/architecture.md) for the data flow. Perp Canary is independent of dreamDEX and Somnia. Original Perp Canary code is licensed under [MIT](LICENSE).
+
+# M3.0 bot foundation
+
+The Bot Connection panel reports local public keystore metadata and live Hideki delegated permissions. Run `npm run bot -- status` in a local terminal. `npm run bot -- create` is an owner-controlled interactive action that creates a new encrypted bot wallet only when deliberately invoked; no bot wallet is bundled with this repository. `npm run bot -- unlock` validates locally and returns to locked state. Signing and broadcasting are disabled. See [M3.0 bot foundation](docs/m3-bot-foundation.md).

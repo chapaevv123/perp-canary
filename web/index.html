@@ -52,9 +52,14 @@
     <form id="forensicsForm"><label class="wide">Public transaction hash<input id="forensicsHash" class="mono" placeholder="0x…" required></label><label class="wide">Expected trading wallet<input id="forensicsWallet" class="mono" placeholder="0x… public address" required></label><button class="secondary wide" type="submit">Inspect existing transaction</button></form>
     <div id="forensicsState" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · No transaction inspected.</div><div id="forensicsResults"></div>
   </section>
-  <section class="panel" id="tradingAuthorization"><h2>Trading Authorization</h2><p class="sub">LIVE read-only owner and operator permissions for Hideki BTC-PERP. The M2.5 sender is a historical observation, not a signer available to Perp Canary. No signature or broadcast is possible in M2.6.</p>
+  <section class="panel" id="tradingAuthorization"><h2>Trading Authorization</h2><p class="sub">LIVE read-only owner and operator permissions for Hideki BTC-PERP. The M2.5 sender is a historical observation, not a signer available to Perp Canary. No signature or broadcast is possible in M3.0.</p>
     <form id="authorizationForm"><label>Connected EOA<input id="authEoa" class="mono" value="0x6Fa3659a15e9264E43EC67Fe4Bb5d31D38109A42"></label><label>Trading wallet / order owner<input id="authTrading" class="mono" value="0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f"></label><label>Candidate operator (public address)<input id="authOperator" class="mono" placeholder="Historical M2.5 sender by default"></label><label>Market pool<input id="authPool" class="mono" value="0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0"></label><label>Side for unsigned prototype<select id="authSide"><option value="">Permissions only</option><option value="BUY">BUY</option><option value="SELL">SELL</option></select></label><label>Limit price<input id="authPrice" inputmode="decimal" placeholder="Optional with side and quantity"></label><label>Quantity<input id="authQuantity" inputmode="decimal" placeholder="Optional with side and price"></label><button class="secondary wide" type="submit">Inspect authorization and simulate</button></form>
     <div id="authorizationState" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · Run read-only authorization checks.</div><div id="authorizationResults"></div>
+  </section>
+  <section class="panel" id="botConnection"><h2>Bot Connection</h2><p class="sub">A local encrypted bot keystore is created only from your own terminal. The browser receives a public address and live read-only authorization facts; passwords and keys never enter HTTP.</p>
+    <p>In your local terminal run <code>npm run bot -- status</code>. When you separately decide to create a new bot key, run <code>npm run bot -- create</code>. Link the displayed public address yourself in <a href="https://app.testnet.dreamdex.io/docs/trading/common/link-a-bot" target="_blank" rel="noopener noreferrer">official dreamDEX Link a Bot instructions</a>. Select the intended wallet and BTC-PERP. To revoke, use Manage → Bot access → Bots in dreamDEX.</p>
+    <button id="refreshBot" class="secondary" type="button">Check local bot and on-chain link</button><div id="botState" class="notice" role="status" aria-live="polite">NOT_CONFIGURED · Checking local keystore status…</div><div id="botFacts"></div>
+    <h3>Read-only delegated order preflight</h3><form id="botPlanForm"><label>Side<select id="botSide"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></label><label>Limit price<input id="botPrice" inputmode="decimal" placeholder="e.g. 80440.4" required></label><label>Quantity<input id="botQuantity" inputmode="decimal" placeholder="e.g. 0.001" required></label><button id="botPlanButton" type="submit" disabled>Plan and simulate</button></form><div id="botPlanState" class="notice" role="status" aria-live="polite">BLOCKED · Connect and verify a bot first. Signing and broadcast remain disabled.</div>
   </section>
   <section class="panel"><h2>Evidence Explorer</h2><p class="sub">Plans and reconciliations use a separate local SHA-256 chain. Wallet-linked records stay on this machine and are excluded from Git.</p><div id="records" class="empty">No execution evidence yet.</div></section>
 </main>
@@ -78,5 +83,6 @@ loadOverview();loadRecords();
 <script src="/funding.js"></script>
 <script src="/forensics.js"></script>
 <script src="/authorization.js"></script>
+<script src="/bot.js"></script>
 </body>
 </html>

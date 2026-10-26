@@ -12,6 +12,11 @@ import { collectFundingIntelligence } from './funding-intelligence.ts';
 import { collectTradeForensics } from './trade-forensics.ts';
 import { readTradeArtifacts } from './trade-evidence.ts';
 import { inspectTradingAuthorization, AuthorizationReadError } from './trading-authorization.ts';
+import { readBotKeystore } from './bot-keystore.ts';
+import { inspectBotConnection, buildBotExecutionPlan } from './bot-foundation.ts';
+import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
+import { appendBotPlanEvidence } from './bot-evidence.ts';
+import { localRequestRejection } from './server-security.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -19,8 +24,10 @@ const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
 const forensicsJsPath = resolve('web/forensics.js');
 const authorizationJsPath = resolve('web/authorization.js');
+const botJsPath = resolve('web/bot.js');
 const tradeEvidenceDir = resolve('trade-evidence');
 const executionDir = resolve('execution-evidence');
+const botEvidenceDir = resolve('bot-evidence');
 let refreshing = false;
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
@@ -48,10 +55,9 @@ function json(response: import('node:http').ServerResponse, status: number, valu
 createServer(async (request, response) => {
   const path = new URL(request.url ?? '/', 'http://localhost').pathname;
   try {
-    if (request.method === 'POST' && request.headers.origin &&
-      ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(request.headers.origin)) {
-      json(response, 403, { error: 'Cross-origin writes are blocked' }); return;
-    }
+    const rejection = localRequestRejection({ host: request.headers.host, origin: request.headers.origin,
+      fetchSite: request.headers['sec-fetch-site'], method: request.method }, port);
+    if (rejection) { json(response, 403, { error: rejection }); return; }
     if (request.method === 'POST' && path === '/api/v1/snapshot') {
       if (refreshing) { json(response, 409, { error: 'A snapshot refresh is already running' }); return; }
       refreshing = true;
@@ -117,6 +123,24 @@ createServer(async (request, response) => {
         quantity: typeof body.quantity === 'string' ? body.quantity : undefined,
       });
       json(response, 200, result);
+    } else if (request.method === 'GET' && path === '/api/v1/bot-connection') {
+      json(response, 200, await inspectBotConnection());
+    } else if (request.method === 'POST' && path === '/api/v1/bot-plan') {
+      const body = await jsonBody(request);
+      if (body.side !== 'BUY' && body.side !== 'SELL') throw new Error('Side must be BUY or SELL');
+      if (typeof body.price !== 'string' || typeof body.quantity !== 'string') throw new Error('Price and quantity required');
+      const keystore = await readBotKeystore();
+      if (!keystore) { json(response, 409, { status: 'NOT_CONFIGURED', error: 'Local bot keystore is not configured' }); return; }
+      const connection = await inspectBotConnection();
+      if (connection.status !== 'ON_CHAIN_LINK_OBSERVED') {
+        json(response, 409, { status: connection.status, error: 'Effective market permission is not verified' }); return;
+      }
+      const observation = await inspectTradingAuthorization({ operator: keystore.address,
+        tradingWallet: OWNER_TRADING_WALLET, pool: BTC_POOL, side: body.side,
+        price: body.price, quantity: body.quantity });
+      const plan = buildBotExecutionPlan(observation, { side: body.side, price: body.price, quantity: body.quantity });
+      const record = await appendBotPlanEvidence(botEvidenceDir, plan);
+      json(response, 200, { ...plan, evidenceHash: record.hash });
     } else if (request.method === 'POST' && path === '/api/v1/reconcile') {
       const body = await jsonBody(request);
       const records = await readExecutionRecords(executionDir);
@@ -151,6 +175,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/authorization.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(authorizationJsPath));
+    } else if (request.method === 'GET' && path === '/bot.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(botJsPath));
     } else if (request.method === 'GET' && (path === '/api/v1/snapshots' || path === '/api/v1/latest')) {
       const history = await readSnapshots(evidenceDir);
       const value = path.endsWith('/latest') ? history.at(-1) ?? null : history;

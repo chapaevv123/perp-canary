@@ -18,10 +18,13 @@ try {
     const trades = await readTradeArtifacts(resolve('trade-evidence'));
     const { readAuthorizationArtifacts } = await import('./authorization-evidence.ts');
     const authorizations = await readAuthorizationArtifacts(resolve('authorization-evidence'));
+    const { readBotPlanEvidence } = await import('./bot-evidence.ts');
+    const botPlans = await readBotPlanEvidence(resolve('bot-evidence'));
     console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null,
       executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null,
       tradeArtifacts: trades.length, tradeHashes: trades.map(trade => trade.hash),
-      authorizationArtifacts: authorizations.length, authorizationHashes: authorizations.map(artifact => artifact.hash) }, null, 2));
+      authorizationArtifacts: authorizations.length, authorizationHashes: authorizations.map(artifact => artifact.hash),
+      botPlanRecords: botPlans.length, botPlanHead: botPlans.at(-1)?.hash ?? null }, null, 2));
   } else {
     throw new Error('Usage: npm run snapshot | npm run verify');
   }

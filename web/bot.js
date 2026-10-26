@@ -1,0 +1,45 @@
+(() => {
+  const node = id => document.getElementById(id);
+  const fact = (table, label, value) => {
+    const row = document.createElement('tr');
+    for (const item of [label, value]) { const cell = document.createElement('td'); cell.textContent = String(item); row.append(cell); }
+    table.append(row);
+  };
+  async function json(url, options) {
+    const response = await fetch(url, options);
+    if (!(response.headers.get('content-type') || '').includes('application/json')) throw Error('Local server returned a non-JSON response');
+    const value = await response.json();
+    if (!response.ok) throw Error(value.error || `HTTP ${response.status}`);
+    return value;
+  }
+  async function refresh() {
+    node('botPlanButton').disabled = true;
+    node('botState').textContent = 'Reading local public metadata and Hideki permissions…';
+    node('botFacts').replaceChildren();
+    try {
+      const result = await json('/api/v1/bot-connection');
+      node('botState').textContent = `${result.status} · ${result.nextAction}`;
+      const table = document.createElement('table');
+      for (const [label, value] of [['Bot wallet status', result.status], ['Public bot address', result.address || 'NOT_CONFIGURED'],
+        ['Network', `${result.network} ${result.chainId}`], ['Gas balance (STT)', result.gasStt],
+        ['Trading wallet', result.tradingWallet], ['Allowed markets', result.allowedMarkets.join(', ') || 'UNKNOWN'],
+        ['Permission expiry', result.permissionExpiry], ['Revocation status', result.revocationStatus],
+        ['Sampled block', result.sampledBlock || 'UNKNOWN']]) fact(table, label, value);
+      for (const [name, grant] of Object.entries(result.permissions || {})) fact(table, `${name} effective permission`, `${grant.effective.status} · ${grant.effective.value}`);
+      node('botFacts').append(table);
+      node('botPlanButton').disabled = result.status !== 'ON_CHAIN_LINK_OBSERVED';
+    } catch (error) { node('botState').textContent = `UNKNOWN · ${error.message}`; }
+  }
+  node('refreshBot').onclick = refresh;
+  node('botPlanForm').onsubmit = async event => {
+    event.preventDefault();
+    node('botPlanState').textContent = 'Running read-only Hideki preflight…';
+    try {
+      const plan = await json('/api/v1/bot-plan', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ side: node('botSide').value, price: node('botPrice').value.trim(),
+          quantity: node('botQuantity').value.trim() }) });
+      node('botPlanState').textContent = `${plan.status} · ${plan.blockers.join('; ')} · plan SHA-256 ${plan.hash}`;
+    } catch (error) { node('botPlanState').textContent = `BLOCKED · ${error.message}`; }
+  };
+  refresh();
+})();

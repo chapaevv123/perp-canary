@@ -14,9 +14,12 @@ coverage/
 *.pfx
 *.secret
 secrets/
+*.keystore
+bot-keystore/
 *.db
 *.sqlite
 *.sqlite3
 *.tsbuildinfo
 test-results/
 execution-evidence/
+bot-evidence/
