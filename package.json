@@ -8,6 +8,7 @@
     "verify": "node --experimental-strip-types src/cli.ts verify",
     "serve": "node --experimental-strip-types src/server.ts",
     "bot": "node --experimental-strip-types src/bot-cli.ts",
+    "bot-execute": "node --experimental-strip-types src/execute-bot-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."

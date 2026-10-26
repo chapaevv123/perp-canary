@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getAddress, type Hex } from 'viem';
+import type { TransactionSerializable } from 'viem';
 
 function deriveKey(password: string, salt: Buffer, n: number): Promise<Buffer> {
   return new Promise((resolve, reject) => scryptCallback(password, salt, 32,
@@ -75,6 +76,27 @@ export async function unlockBotAddress(value: unknown, password: string): Promis
     return address;
   } catch { throw new BotKeystoreError('Password incorrect or keystore corrupted'); }
   finally { key.fill(0); plaintext?.fill(0); }
+}
+export type LocalBotSigner = { address: string;
+  signTransaction: (transaction: TransactionSerializable) => Promise<Hex> };
+export async function withUnlockedBotSigner<T>(value: unknown, password: string,
+  action: (signer: LocalBotSigner) => Promise<T>): Promise<T> {
+  const data = validateKeystore(value);
+  const c = data.crypto;
+  const key = await deriveKey(password, Buffer.from(c.salt, 'hex'), c.n);
+  let plaintext: Buffer | undefined;
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(c.iv, 'hex'));
+    decipher.setAAD(Buffer.from(`${SCHEMA}|50383|${data.address.toLowerCase()}`));
+    decipher.setAuthTag(Buffer.from(c.tag, 'hex'));
+    plaintext = Buffer.concat([decipher.update(Buffer.from(c.ciphertext, 'hex')), decipher.final()]);
+    const account = privateKeyToAccount(`0x${plaintext.toString('hex')}`);
+    if (account.address !== getAddress(data.address)) throw new BotKeystoreError('Keystore signer address mismatch');
+    return await action({ address: account.address, signTransaction: tx => account.signTransaction(tx) });
+  } catch (error) {
+    if (error instanceof BotKeystoreError) throw error;
+    throw new BotKeystoreError('Password incorrect, keystore corrupted, or local signing failed');
+  } finally { key.fill(0); plaintext?.fill(0); }
 }
 export async function readBotKeystore(path = BOT_KEYSTORE_PATH): Promise<BotKeystore | null> {
   let contents: string;

@@ -1,0 +1,109 @@
+import { decodeFunctionData, getAddress, parseAbi, parseUnits, type Hex } from 'viem';
+import { sha256 } from './evidence.ts';
+import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
+import type { inspectTradingAuthorization } from './trading-authorization.ts';
+
+type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
+export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
+export const MAX_NOTIONAL_WEI = 100n * 10n ** 18n;
+export const MAX_GAS_LIMIT = 10_000_000n;
+export const MAX_GAS_COST_WEI = 100_000_000_000_000_000n; // 0.1 STT
+export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'PREPARED' | 'BLOCKED';
+  operation: 'PLACE'; chainId: 50383; owner: string; operator: string; pool: string;
+  side: 'BUY' | 'SELL'; price: string; quantity: string; intentId: string;
+  observedAt: string; sampledBlock: string; expiresAt: string; markPriceRaw: string;
+  positionSizeBeforeRaw: string;
+  transaction: { from: string; to: string; data: Hex; value: '0' } | null;
+  risk: { maxNotionalWei: string; orderNotionalWei: string; gasLimit: string;
+    estimatedGasUnits: string; gasPriceWei: string; maxGasCostWei: string; marginBankUnlocked: string };
+  checks: { chain: boolean; market: boolean; permission: boolean; margin: boolean;
+    gas: boolean; simulation: boolean; fresh: boolean; notional: boolean; targetAndCalldata: boolean };
+  blockers: string[]; hash: string };
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+export function validatePlaceCall(data: Hex, input: { owner: string; side: 'BUY' | 'SELL'; price: string;
+  quantity: string; expiresAt: string }): boolean {
+  try {
+    const decoded = decodeFunctionData({ abi: PLACE_ABI, data });
+    if (decoded.functionName !== 'placeOrderFor') return false;
+    const [owner, isBid, userData, price, quantity, expiresNs, orderType, selfMatch, builder, fee] = decoded.args;
+    return same(owner, input.owner) && isBid === (input.side === 'BUY') && userData === 0n &&
+      price === parseUnits(input.price, 18) && quantity === parseUnits(input.quantity, 8) &&
+      expiresNs === BigInt(Date.parse(input.expiresAt)) * 1_000_000n && orderType === 2 &&
+      selfMatch === 0 && same(builder, '0x0000000000000000000000000000000000000000') && fee === 0n;
+  } catch { return false; }
+}
+export function buildPreparedPlan(observation: Observation, input: { side: 'BUY' | 'SELL'; price: string; quantity: string },
+  now = Date.now()): PreparedPlan {
+  const unsigned = observation.unsigned;
+  let orderNotional = 0n;
+  try { orderNotional = parseUnits(input.price, 18) * parseUnits(input.quantity, 8) / 10n ** 8n; }
+  catch { /* Invalid precision remains blocked by the read-only preflight. */ }
+  const estimated = /^\d+$/.test(observation.estimatedGasUnits) ? BigInt(observation.estimatedGasUnits) : 0n;
+  const gasPrice = /^\d+$/.test(observation.gasPriceWei) ? BigInt(observation.gasPriceWei) : 0n;
+  const gasLimit = estimated * 125n / 100n + 100_000n;
+  const gasCost = gasLimit * gasPrice;
+  const checks = { chain: observation.chainId === 50383 && unsigned?.chainId === 50383,
+    market: observation.market === 'BTC-PERP' && same(observation.pool, BTC_POOL) &&
+      observation.marketSupported.status === 'SUPPORTED' && /^\d+$/.test(observation.markPriceRaw) &&
+      BigInt(observation.markPriceRaw) > 0n && /^-?\d+$/.test(observation.positionSizeRaw),
+    permission: observation.registryMatches.status === 'SUPPORTED' && observation.permissions.place.effective.status === 'SUPPORTED',
+    margin: observation.marginSufficient === true && observation.marginBankUnlocked !== 'UNKNOWN' &&
+      !observation.planBlockers.some(blocker => /margin|collateral|placeable|size|voucher/i.test(blocker)),
+    gas: gasPrice > 0n && estimated > 0n && gasLimit <= MAX_GAS_LIMIT && gasCost <= MAX_GAS_COST_WEI &&
+      observation.operatorGasStt !== 'UNKNOWN' && parseUnits(observation.operatorGasStt === 'UNKNOWN' ? '0' : observation.operatorGasStt, 18) >= gasCost,
+    simulation: observation.simulation.status === 'SUPPORTED',
+    fresh: now >= Date.parse(observation.observedAt) && now - Date.parse(observation.observedAt) <= 30_000 &&
+      !!unsigned && Date.parse(unsigned.expiresAt) > now + 15_000,
+    notional: orderNotional > 0n && orderNotional <= MAX_NOTIONAL_WEI,
+    targetAndCalldata: !!unsigned && same(unsigned.from, observation.candidateOperator) &&
+      same(unsigned.to, BTC_POOL) && unsigned.value === '0' &&
+      same(observation.tradingWallet, OWNER_TRADING_WALLET) &&
+      validatePlaceCall(unsigned.data, { owner: OWNER_TRADING_WALLET, side: input.side, price: input.price,
+        quantity: input.quantity, expiresAt: unsigned.expiresAt }),
+  };
+  const blockers = [...observation.planBlockers];
+  for (const [name, passed] of Object.entries(checks)) if (!passed) blockers.push(`${name} gate failed`);
+  const body = { schema: 'perp-canary/delegated-plan/v2' as const,
+    status: blockers.length ? 'BLOCKED' as const : 'PREPARED' as const, operation: 'PLACE' as const,
+    chainId: 50383 as const, owner: getAddress(OWNER_TRADING_WALLET), operator: observation.candidateOperator,
+    pool: getAddress(BTC_POOL), side: input.side, price: input.price, quantity: input.quantity,
+    intentId: sha256({ chainId: 50383, owner: OWNER_TRADING_WALLET.toLowerCase(),
+      operator: observation.candidateOperator.toLowerCase(), pool: BTC_POOL.toLowerCase(),
+      side: input.side, price: input.price, quantity: input.quantity }),
+    observedAt: observation.observedAt, sampledBlock: observation.sampledBlock,
+    expiresAt: unsigned?.expiresAt ?? new Date(now).toISOString(), markPriceRaw: observation.markPriceRaw,
+    positionSizeBeforeRaw: observation.positionSizeRaw,
+    transaction: unsigned ? { from: unsigned.from, to: unsigned.to, data: unsigned.data, value: '0' as const } : null,
+    risk: { maxNotionalWei: MAX_NOTIONAL_WEI.toString(), orderNotionalWei: orderNotional.toString(),
+      gasLimit: gasLimit.toString(), estimatedGasUnits: estimated.toString(), gasPriceWei: gasPrice.toString(),
+      maxGasCostWei: gasCost.toString(), marginBankUnlocked: observation.marginBankUnlocked }, checks, blockers };
+  return { ...body, hash: sha256(body) };
+}
+export function verifyPreparedPlan(plan: PreparedPlan): void {
+  const { hash, ...body } = plan;
+  let riskValid = false;
+  try {
+    const gasLimit = BigInt(plan.risk.gasLimit);
+    const notional = parseUnits(plan.price, 18) * parseUnits(plan.quantity, 8) / 10n ** 8n;
+    riskValid = plan.risk.maxNotionalWei === MAX_NOTIONAL_WEI.toString() &&
+      notional > 0n && notional <= MAX_NOTIONAL_WEI &&
+      plan.risk.orderNotionalWei === notional.toString() && gasLimit > 0n && gasLimit <= MAX_GAS_LIMIT &&
+      BigInt(plan.risk.maxGasCostWei) === gasLimit * BigInt(plan.risk.gasPriceWei) &&
+      BigInt(plan.risk.maxGasCostWei) <= MAX_GAS_COST_WEI &&
+      /^-?\d+$/.test(plan.positionSizeBeforeRaw) && BigInt(plan.markPriceRaw) > 0n;
+  } catch { riskValid = false; }
+  const expectedIntent = sha256({ chainId: 50383, owner: OWNER_TRADING_WALLET.toLowerCase(),
+    operator: plan.operator.toLowerCase(), pool: BTC_POOL.toLowerCase(),
+    side: plan.side, price: plan.price, quantity: plan.quantity });
+  if (plan.schema !== 'perp-canary/delegated-plan/v2' || hash !== sha256(body) ||
+    (plan.status === 'PREPARED' && !riskValid) || plan.intentId !== expectedIntent ||
+    (plan.status === 'PREPARED' && (plan.blockers.length > 0 || Object.values(plan.checks).some(value => !value))) ||
+    (plan.status === 'PREPARED' && (Date.parse(plan.expiresAt) <= Date.parse(plan.observedAt) ||
+      Date.parse(plan.expiresAt) - Date.parse(plan.observedAt) > 240_000)) ||
+    plan.chainId !== 50383 || plan.operation !== 'PLACE' || !['BUY', 'SELL'].includes(plan.side) ||
+    !same(plan.owner, OWNER_TRADING_WALLET) ||
+    !same(plan.pool, BTC_POOL) || (plan.status === 'PREPARED' && !plan.transaction) ||
+    (plan.transaction && (!same(plan.transaction.to, BTC_POOL) ||
+      !same(plan.transaction.from, plan.operator) || plan.transaction.value !== '0' ||
+      !validatePlaceCall(plan.transaction.data, plan)))) throw Error('Prepared plan integrity or allowlist failure');
+}

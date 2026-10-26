@@ -13,9 +13,13 @@ import { collectTradeForensics } from './trade-forensics.ts';
 import { readTradeArtifacts } from './trade-evidence.ts';
 import { inspectTradingAuthorization, AuthorizationReadError } from './trading-authorization.ts';
 import { readBotKeystore } from './bot-keystore.ts';
-import { inspectBotConnection, buildBotExecutionPlan } from './bot-foundation.ts';
+import { inspectBotConnection } from './bot-foundation.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
+import { readBotPlanEvidence } from './bot-evidence.ts';
+import { buildPreparedPlan } from './delegated-plan.ts';
+import { readExecutionLedger } from './execution-ledger.ts';
+import { readForensicEvidence } from './delegated-forensics.ts';
 import { localRequestRejection } from './server-security.ts';
 
 const evidenceDir = resolve('evidence');
@@ -28,6 +32,8 @@ const botJsPath = resolve('web/bot.js');
 const tradeEvidenceDir = resolve('trade-evidence');
 const executionDir = resolve('execution-evidence');
 const botEvidenceDir = resolve('bot-evidence');
+const botExecutionLedgerDir = resolve('bot-execution-ledger');
+const botForensicDir = resolve('bot-execution-forensics');
 let refreshing = false;
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
@@ -138,9 +144,28 @@ createServer(async (request, response) => {
       const observation = await inspectTradingAuthorization({ operator: keystore.address,
         tradingWallet: OWNER_TRADING_WALLET, pool: BTC_POOL, side: body.side,
         price: body.price, quantity: body.quantity });
-      const plan = buildBotExecutionPlan(observation, { side: body.side, price: body.price, quantity: body.quantity });
+      const plan = buildPreparedPlan(observation, { side: body.side, price: body.price, quantity: body.quantity });
       const record = await appendBotPlanEvidence(botEvidenceDir, plan);
       json(response, 200, { ...plan, evidenceHash: record.hash });
+    } else if (request.method === 'GET' && path === '/api/v1/bot-execution') {
+      const plans = await readBotPlanEvidence(botEvidenceDir);
+      const forensic = await readForensicEvidence(botForensicDir);
+      const rows = await Promise.all(plans.filter(p => p.plan.schema === 'perp-canary/delegated-plan/v2')
+        .slice(-20).map(async record => {
+          if (record.plan.schema !== 'perp-canary/delegated-plan/v2') throw Error('Plan schema mismatch');
+          const plan = record.plan;
+          return { plan, history: await readExecutionLedger(botExecutionLedgerDir, plan.intentId),
+            forensic: forensic.filter(f => f.planHash === plan.hash) };
+        }));
+      json(response, 200, { rows });
+    } else if (request.method === 'GET' && path.startsWith('/api/v1/bot-evidence/')) {
+      const hash = path.slice('/api/v1/bot-evidence/'.length);
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw Error('Invalid evidence hash');
+      const record = (await readForensicEvidence(botForensicDir)).find(item => item.hash === hash);
+      if (!record) { json(response, 404, { error: 'Evidence not found' }); return; }
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
+        'content-disposition': `attachment; filename="${hash}.json"`, 'cache-control': 'no-store' });
+      response.end(JSON.stringify(record));
     } else if (request.method === 'POST' && path === '/api/v1/reconcile') {
       const body = await jsonBody(request);
       const records = await readExecutionRecords(executionDir);
@@ -190,8 +215,8 @@ createServer(async (request, response) => {
         latestEvidenceHash: history.at(-1)?.hash ?? null }));
     } else if (request.method === 'GET' && path === '/api/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ service: 'perp-canary', mode: 'READ_ONLY', evidence: 'LOCAL_VERIFIED_FILES',
-        transactionSending: 'DISABLED' }));
+      response.end(JSON.stringify({ service: 'perp-canary', mode: 'READ_ONLY_HTTP', evidence: 'LOCAL_VERIFIED_FILES',
+        transactionSending: 'LOCAL_OWNER_CONFIRMED_CLI_ONLY' }));
     } else if (path.startsWith('/api/')) {
       json(response, 404, { error: 'API route not found. Restart the Perp Canary server if this page was just updated.' });
     } else {

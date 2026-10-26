@@ -3,7 +3,8 @@ import test from 'node:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { encryptBotKey, readBotKeystore, saveBotKeystore, unlockBotAddress, validateKeystore } from '../src/bot-keystore.ts';
+import { encryptBotKey, readBotKeystore, saveBotKeystore, unlockBotAddress,
+  validateKeystore, withUnlockedBotSigner } from '../src/bot-keystore.ts';
 import { buildBotExecutionPlan, broadcastBotPlan, IntentReservations, signBotPlan, summarizeConnection } from '../src/bot-foundation.ts';
 import { appendBotPlanEvidence, readBotPlanEvidence } from '../src/bot-evidence.ts';
 import { localRequestRejection } from '../src/server-security.ts';
@@ -52,6 +53,19 @@ test('fixture private key is encrypted; wrong password, tampering and wrong chai
     await writeFile(path, '{corrupted');
     await assert.rejects(readBotKeystore(path), /corrupted/);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('local signer rejects missing or incorrect password without exposing a private key', async () => {
+  const data = await encryptBotKey(fixtureKey, password, 1 << 14);
+  let called = false;
+  await assert.rejects(withUnlockedBotSigner(data, '', async () => { called = true; }), /Password incorrect/);
+  await assert.rejects(withUnlockedBotSigner(data, 'wrong-password', async () => { called = true; }), /Password incorrect/);
+  assert.equal(called, false);
+  const publicAddress = await withUnlockedBotSigner(data, password, async signer => signer.address);
+  assert.equal(publicAddress, data.address);
+  assert.equal(JSON.stringify(data).includes(fixtureKey.slice(2)), false);
+  await assert.rejects(withUnlockedBotSigner({ ...data, address: '0x2222222222222222222222222222222222222222' },
+    password, async () => { called = true; }), /Password incorrect/);
 });
 
 test('on-chain permission must be effective; revoked and unknown states never become connected', () => {

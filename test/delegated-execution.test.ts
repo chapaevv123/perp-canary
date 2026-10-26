@@ -1,0 +1,189 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { encodeFunctionData, keccak256, parseUnits, type Hex } from 'viem';
+import { buildPreparedPlan, PLACE_ABI, verifyPreparedPlan } from '../src/delegated-plan.ts';
+import { assessExecutionPreflight, executeDelegatedPlan, type ExecutionPorts } from '../src/delegated-execution.ts';
+import { assessDelegatedTrade, readForensicEvidence, saveForensicEvidence } from '../src/delegated-forensics.ts';
+import { appendExecutionState, readAllExecutionLedgers, readExecutionLedger, reserveIntent } from '../src/execution-ledger.ts';
+import { BTC_POOL, OWNER_TRADING_WALLET, type ForensicsBody } from '../src/trade-forensics.ts';
+import { signedFieldsMatch } from '../src/signed-transaction.ts';
+import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
+
+type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
+const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
+const input = { side: 'BUY' as const, price: '80000', quantity: '0.001' };
+function observation(changes: Record<string, unknown> = {}, order = input): Observation {
+  const expiresAt = new Date(Date.now() + 120_000).toISOString();
+  const data = encodeFunctionData({ abi: PLACE_ABI, functionName: 'placeOrderFor',
+    args: [OWNER_TRADING_WALLET, order.side === 'BUY', 0n, parseUnits(order.price, 18),
+      parseUnits(order.quantity, 8), BigInt(Date.parse(expiresAt)) * 1_000_000n,
+      2, 0, '0x0000000000000000000000000000000000000000', 0n] });
+  return { observedAt: new Date().toISOString(), chainId: 50383, sampledBlock: '34017211',
+    tradingWallet: OWNER_TRADING_WALLET, candidateOperator: BOT, pool: BTC_POOL, market: 'BTC-PERP',
+    marketSupported: { status: 'SUPPORTED' }, registryMatches: { status: 'SUPPORTED' },
+    permissions: { place: { effective: { status: 'SUPPORTED' } } }, marginSufficient: true,
+    marginBankUnlocked: '1000', operatorGasStt: '5', markPriceRaw: parseUnits('80000', 18).toString(),
+    positionSizeRaw: '0', estimatedGasUnits: '2000000', gasPriceWei: '6000000000',
+    planBlockers: [], simulation: { status: 'SUPPORTED' },
+    unsigned: { chainId: 50383, from: BOT, to: BTC_POOL, value: '0', data, expiresAt },
+    ...changes } as unknown as Observation;
+}
+const plan = () => buildPreparedPlan(observation(), input);
+function evidence(p: ReturnType<typeof plan>, options: { filled?: string; position?: string;
+  receiptStatus?: string; noFill?: boolean; txHash?: string } = {}): ForensicsBody {
+  const qty = options.filled ?? parseUnits(p.quantity, 8).toString();
+  const events: Array<Record<string, unknown>> = [{ eventName: 'OrderPlaced', address: p.pool,
+    args: { orderId: '7', placedOrder: { owner: p.owner, fullQuantity: parseUnits(p.quantity, 8).toString(),
+      isBid: p.side === 'BUY' } } }];
+  if (!options.noFill) events.push({ eventName: 'OrderFilled', address: p.pool,
+    args: { takerOrderId: '7', quantityFilled: qty, fillPrice: parseUnits(p.price, 18).toString() } });
+  if (!options.noFill) events.push({ eventName: 'PositionUpdated', address: p.pool,
+    args: { account: p.owner, perpPool: p.pool, newSize: options.position ?? qty } });
+  const txHash = options.txHash ?? `0x${'ab'.repeat(32)}`;
+  const blockHash = `0x${'cd'.repeat(32)}`;
+  return { txHash, chainId: 50383,
+    transaction: { hash: txHash, blockHash, from: p.operator, to: p.pool, input: p.transaction!.data },
+    receipt: { transactionHash: txHash, blockHash, status: options.receiptStatus ?? '0x1',
+      from: p.operator, to: p.pool },
+    marketIdentity: { status: 'VERIFIED' }, decodedEvents: events } as unknown as ForensicsBody;
+}
+function ports(p: ReturnType<typeof plan>, changes: Partial<ExecutionPorts> = {}): ExecutionPorts {
+  const raw = '0x02abcd' as Hex;
+  return { fresh: async () => observation(), chainId: async () => 50383,
+    nonce: async () => 4, gasPrice: async () => 6_000_000_000n,
+    gasBalance: async () => parseUnits('5', 18), estimateOriginal: async () => 2_000_000n,
+    confirm: async () => true, sign: async () => raw,
+    verifySigned: async () => true,
+    broadcastOnce: async () => keccak256(raw),
+    receiptAndForensics: async hash => ({ body: evidence(p, { txHash: hash }),
+      currentPositionRaw: parseUnits(p.quantity, 8).toString() }), ...changes };
+}
+
+test('valid official BTC-PERP calldata yields an immutable prepared plan', () => {
+  const p = plan();
+  assert.equal(p.status, 'PREPARED');
+  assert.equal(p.risk.orderNotionalWei, parseUnits('80', 18).toString());
+  assert.doesNotThrow(() => verifyPreparedPlan(p));
+  assert.throws(() => verifyPreparedPlan({ ...p, price: '1' }), /integrity/);
+  assert.throws(() => verifyPreparedPlan({ ...p, pool: BOT }), /integrity/);
+});
+test('unauthorized, revoked, wrong chain, market, margin, gas, simulation and oversize are blocked', () => {
+  const denied = { permissions: { place: { effective: { status: 'BLOCKED' } } } };
+  for (const change of [denied, { chainId: 1 }, { market: 'ETH-PERP' },
+    { marginSufficient: false }, { operatorGasStt: '0' }, { simulation: { status: 'BLOCKED' } },
+    { planBlockers: ['SDK maximum placeable size unavailable or exceeded'] }])
+    assert.equal(buildPreparedPlan(observation(change), input).status, 'BLOCKED');
+  const big = { ...input, quantity: '0.01' };
+  assert.equal(buildPreparedPlan(observation({}, big), big).status, 'BLOCKED');
+});
+test('stale, expired, wrong nonce, calldata, gas and mark changes block Phase B', () => {
+  const p = plan();
+  const base = { chainId: 50383, latestNonce: 4, pendingNonce: 4, gasPrice: 6_000_000_000n,
+    gasBalance: parseUnits('5', 18), simulatedGas: 2_000_000n, now: Date.now() };
+  assert.equal(assessExecutionPreflight(p, observation(), base).passed, true);
+  for (const change of [{ chainId: 5031 }, { pendingNonce: 5 }, { gasBalance: 0n },
+    { simulatedGas: 20_000_000n }, { now: Date.parse(p.expiresAt) + 1 }])
+    assert.equal(assessExecutionPreflight(p, observation(), { ...base, ...change }).passed, false);
+  assert.equal(assessExecutionPreflight(p, observation({ markPriceRaw: parseUnits('82000', 18).toString() }), base).passed, false);
+  assert.equal(assessExecutionPreflight(p, observation({ positionSizeRaw: '1' }), base).passed, false);
+  assert.equal(assessExecutionPreflight(p, observation({ unsigned: { ...observation().unsigned,
+    to: BOT } }), base).passed, false);
+  assert.equal(assessExecutionPreflight(p, observation({ observedAt: new Date(Date.now() - 31_000).toISOString() }), base).passed, false);
+});
+test('signed transaction fields reject mainnet, wrong target, signer and nonce', () => {
+  const p = plan();
+  const expected = { type: 'legacy' as const, chainId: 50383, to: BTC_POOL as `0x${string}`,
+    data: p.transaction!.data, value: 0n, gas: BigInt(p.risk.gasLimit), gasPrice: 6_000_000_000n,
+    nonce: 4 };
+  const actual = { ...expected };
+  assert.equal(signedFieldsMatch(actual, expected, BOT, BOT), true);
+  assert.equal(signedFieldsMatch({ ...actual, chainId: 5031 }, expected, BOT, BOT), false);
+  assert.equal(signedFieldsMatch({ ...actual, to: BOT }, expected, BOT, BOT), false);
+  assert.equal(signedFieldsMatch(actual, expected, BOT, OWNER_TRADING_WALLET), false);
+  assert.equal(signedFieldsMatch({ ...actual, nonce: 5 }, expected, BOT, BOT), false);
+});
+test('durable reservation is exclusive and terminal states cannot be duplicated', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-intent-'));
+  const p = plan();
+  try {
+    await reserveIntent(dir, p.intentId, p.hash);
+    await assert.rejects(reserveIntent(dir, p.intentId, p.hash), /EEXIST/);
+    await appendExecutionState(dir, p.intentId, p.hash, 'SIGNED', `0x${'11'.repeat(32)}`);
+    await appendExecutionState(dir, p.intentId, p.hash, 'BROADCAST_ACCEPTED', `0x${'11'.repeat(32)}`);
+    await appendExecutionState(dir, p.intentId, p.hash, 'VERIFIED', `0x${'11'.repeat(32)}`);
+    await assert.rejects(appendExecutionState(dir, p.intentId, p.hash, 'VERIFIED', `0x${'11'.repeat(32)}`), /transition/);
+    assert.equal((await readExecutionLedger(dir, p.intentId)).length, 4);
+    assert.equal((await readAllExecutionLedgers(dir)).length, 1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('SIGNED reservation can be manually reconciled after an uncertain send', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-unknown-'));
+  const p = plan();
+  try {
+    await reserveIntent(dir, p.intentId, p.hash);
+    const hash = `0x${'11'.repeat(32)}`;
+    await appendExecutionState(dir, p.intentId, p.hash, 'SIGNED', hash);
+    await appendExecutionState(dir, p.intentId, p.hash, 'VERIFIED', hash);
+    await assert.rejects(appendExecutionState(dir, p.intentId, p.hash, 'AMBER', hash), /transition/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('mocked local confirmation executes once; no real key or RPC send is used', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-exec-'));
+  const p = plan();
+  let sends = 0;
+  try {
+    const outcome = await executeDelegatedPlan(p, ports(p, { broadcastOnce: async raw => { sends++; return keccak256(raw); } }),
+      { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') });
+    assert.equal(outcome.state, 'VERIFIED');
+    assert.equal(sends, 1);
+    await assert.rejects(executeDelegatedPlan(p, ports(p),
+      { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') }), /EEXIST/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('cancelled confirmation and signer failure never broadcast', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-exec-'));
+  const p = plan();
+  try {
+    assert.equal((await executeDelegatedPlan(p, ports(p, { confirm: async () => false }),
+      { ledger: join(dir, 'cancelled'), forensics: join(dir, 'forensics') })).state, 'CANCELLED');
+    assert.equal((await executeDelegatedPlan(p, ports(p, { sign: async () => { throw Error('wrong password'); } }),
+      { ledger: join(dir, 'failed'), forensics: join(dir, 'forensics') })).state, 'BLOCKED');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('broadcast timeout is UNKNOWN and never automatically retried', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-exec-'));
+  const p = plan();
+  let sends = 0;
+  try {
+    const result = await executeDelegatedPlan(p, ports(p, { broadcastOnce: async () => { sends++; throw Error('timeout'); } }),
+      { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') });
+    assert.equal(result.state, 'UNKNOWN'); assert.equal(sends, 1);
+    assert.equal((await readExecutionLedger(join(dir, 'ledger'), p.intentId)).at(-1)?.state, 'BROADCAST_UNKNOWN');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('receipt forensics separates revert, partial, missing fill and position mismatch', () => {
+  const p = plan();
+  assert.equal(assessDelegatedTrade(p, evidence(p, { receiptStatus: '0x0' }), '100000').verdict, 'RED');
+  assert.equal(assessDelegatedTrade(p, evidence(p, { filled: '50000', position: '50000' }), '50000').verdict, 'AMBER');
+  assert.equal(assessDelegatedTrade(p, evidence(p, { noFill: true }), '0').verdict, 'AMBER');
+  assert.equal(assessDelegatedTrade(p, evidence(p, { position: '999' }), '999').verdict, 'RED');
+  assert.equal(assessDelegatedTrade(p, evidence(p), '100000').verdict, 'VERIFIED');
+  assert.equal(assessDelegatedTrade(p, { ...evidence(p), chainId: 1 }, '100000').verdict, 'RED');
+});
+test('forensic artifact stores reproducible source and detects tampering', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-forensic-'));
+  try {
+    const p = plan();
+    const record = assessDelegatedTrade(p, evidence(p), '100000');
+    await saveForensicEvidence(dir, record);
+    assert.equal((await readForensicEvidence(dir))[0]?.sourceHash, record.sourceHash);
+    const file = join(dir, `${record.txHash.toLowerCase()}.json`);
+    const changed = JSON.parse(await readFile(file, 'utf8'));
+    changed.source.chainId = 1;
+    await writeFile(file, JSON.stringify(changed));
+    await assert.rejects(readForensicEvidence(dir), /invalid/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

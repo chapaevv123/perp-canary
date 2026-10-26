@@ -23,3 +23,5 @@ bot-keystore/
 test-results/
 execution-evidence/
 bot-evidence/
+bot-execution-ledger/
+bot-execution-forensics/

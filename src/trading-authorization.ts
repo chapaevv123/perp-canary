@@ -114,10 +114,14 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       functionName: 'isOwner', args: [eoa] }).catch(() => null) : null;
     const operatorGas = await client.getBalance({ address: operator }).catch(() => null);
     const margin = market ? await sdk.client.getMarginAccount(market.marginBank, owner).catch(() => null) : null;
+    const position = market ? await sdk.client.getPerpPosition({ marginBank: market.marginBank,
+      account: owner, pool }).catch(() => null) : null;
     const planBlockers: string[] = [];
     let unsigned: { chainId: number; from: string; to: string; data: Hex; value: string; expiresAt: string } | null = null;
     let simulation: boolean | null = null;
     let requiredGasWei: bigint | null = null;
+    let estimatedGasUnits: bigint | null = null;
+    let observedGasPriceWei: bigint | null = null;
     let enoughMargin: boolean | null = null;
     if (input.price && input.quantity && input.side && market) {
       const price = positive(input.price, market.quoteDecimals, 'price');
@@ -147,6 +151,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
           expiresAt: new Date(Number(expiresNs / 1_000_000n)).toISOString() };
         const gas = await client.estimateGas({ account: operator, to: pool, data: unsigned.data, value: 0n }).catch(() => null);
         const gasPrice = gas !== null ? await client.getGasPrice().catch(() => null) : null;
+        estimatedGasUnits = gas;
+        observedGasPriceWei = gasPrice;
         simulation = gas !== null;
         requiredGasWei = gas !== null && gasPrice !== null ? gas * gasPrice : null;
         if (!simulation) planBlockers.push('Read-only eth_estimateGas simulation failed');
@@ -169,6 +175,12 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       marginBank: market?.marginBank ?? 'UNKNOWN',
       marginBankUnlocked: margin && market ? formatUnits(margin.unlockedCollateralBalance, market.quoteDecimals) : 'UNKNOWN',
       operatorGasStt: operatorGas === null ? 'UNKNOWN' : formatUnits(operatorGas, 18),
+      markPriceRaw: feed?.markPrice?.toString() ?? 'UNKNOWN',
+      estimatedGasUnits: estimatedGasUnits?.toString() ?? 'UNKNOWN',
+      gasPriceWei: observedGasPriceWei?.toString() ?? 'UNKNOWN',
+      requiredGasWei: requiredGasWei?.toString() ?? 'UNKNOWN',
+      marginSufficient: enoughMargin,
+      positionSizeRaw: position?.size.toString() ?? 'UNKNOWN',
       registry: registryRead ?? 'UNKNOWN', registryMatches: check(registryMatches, AUTH_SOURCES.perps), permissions: grants,
       revokeCapability: { status: 'SUPPORTED', value: 'Owner can revoke bot permissions in dreamDEX Bots tab; no revoke call is made', source: AUTH_SOURCES.bot },
       unsigned, simulation: check(simulation, 'eth_estimateGas read-only; estimates do not guarantee inclusion'),

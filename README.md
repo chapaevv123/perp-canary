@@ -69,4 +69,8 @@ See [architecture](docs/architecture.md) for the data flow. Perp Canary is indep
 
 # M3.0 bot foundation
 
-The Bot Connection panel reports local public keystore metadata and live Hideki delegated permissions. Run `npm run bot -- status` in a local terminal. `npm run bot -- create` is an owner-controlled interactive action that creates a new encrypted bot wallet only when deliberately invoked; no bot wallet is bundled with this repository. `npm run bot -- unlock` validates locally and returns to locked state. Signing and broadcasting are disabled. See [M3.0 bot foundation](docs/m3-bot-foundation.md).
+The Bot Connection panel reports local public keystore metadata and live Hideki delegated permissions. Run `npm run bot -- status` in a local terminal. `npm run bot -- create` is an owner-controlled interactive action that creates a new encrypted bot wallet only when deliberately invoked; no bot wallet is bundled with this repository. `npm run bot -- unlock` validates locally and returns to locked state. See [M3.0 bot foundation](docs/m3-bot-foundation.md).
+
+## M3.3 delegated execution
+
+The Execution Control panel prepares an expiring BTC-PERP `placeOrderFor` plan with a SHA-256 hash after fresh read-only permission, market, margin, gas and simulation checks. The browser cannot sign or send. The separate `npm run bot-execute -- execute <plan-hash>` command is reserved for a later, explicit owner decision: it requires an interactive terminal, exact hash confirmation and local keystore password, then repeats all checks before one Hideki send. Do not run it while reviewing or testing M3.3. An uncertain send stays reserved as `UNKNOWN`; use read-only `npm run bot-execute -- reconcile <plan-hash> <tx-hash>` after inspecting the on-chain transaction. See [M3.3 execution guide](docs/m3-delegated-execution.md).
