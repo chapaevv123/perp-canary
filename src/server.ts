@@ -20,6 +20,9 @@ import { readBotPlanEvidence } from './bot-evidence.ts';
 import { buildPreparedPlan } from './delegated-plan.ts';
 import { readExecutionLedger } from './execution-ledger.ts';
 import { readForensicEvidence } from './delegated-forensics.ts';
+import { buildOrderActionPlan, discoverBtcOrders, inspectOrderAction } from './order-actions.ts';
+import { readOrderActionForensics } from './order-action-forensics.ts';
+import { assessCanary, assessPlanCanary, type CanarySignal } from './canary-safety.ts';
 import { localRequestRejection } from './server-security.ts';
 
 const evidenceDir = resolve('evidence');
@@ -34,6 +37,7 @@ const executionDir = resolve('execution-evidence');
 const botEvidenceDir = resolve('bot-evidence');
 const botExecutionLedgerDir = resolve('bot-execution-ledger');
 const botForensicDir = resolve('bot-execution-forensics');
+const orderActionForensicDir = resolve('bot-order-action-forensics');
 let refreshing = false;
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
@@ -146,22 +150,55 @@ createServer(async (request, response) => {
         price: body.price, quantity: body.quantity });
       const plan = buildPreparedPlan(observation, { side: body.side, price: body.price, quantity: body.quantity });
       const record = await appendBotPlanEvidence(botEvidenceDir, plan);
-      json(response, 200, { ...plan, evidenceHash: record.hash });
+      json(response, 200, { ...plan, canary: assessPlanCanary(plan), evidenceHash: record.hash });
+    } else if (request.method === 'GET' && path === '/api/v1/bot-orders') {
+      const snapshot = await discoverBtcOrders();
+      const signals: CanarySignal[] = [];
+      const { markPriceRaw, liquidationPriceRaw } = snapshot.position;
+      if (!markPriceRaw) signals.push('STALE_MARKET');
+      if (!liquidationPriceRaw) signals.push('UNKNOWN_LIQUIDATION');
+      else if (markPriceRaw && BigInt(markPriceRaw) > 0n &&
+        (BigInt(markPriceRaw) > BigInt(liquidationPriceRaw) ?
+          BigInt(markPriceRaw) - BigInt(liquidationPriceRaw) :
+          BigInt(liquidationPriceRaw) - BigInt(markPriceRaw)) * 100n < BigInt(markPriceRaw) * 5n)
+        signals.push('LIQUIDATION_PROXIMITY');
+      json(response, 200, { ...snapshot, provenance: 'LIVE_READ_ONLY',
+        closePosition: { status: 'BLOCKED', reason: 'reduceOrderFor reduces a resting order, not a perp position; no proven reduce-only position close path' },
+        canary: assessCanary(signals, 'LIVE_READ_ONLY') });
+    } else if (request.method === 'POST' && path === '/api/v1/bot-order-action') {
+      const body = await jsonBody(request);
+      if (body.operation !== 'CANCEL' && body.operation !== 'REDUCE_ORDER')
+        throw Error('Only CANCEL and REDUCE_ORDER are supported');
+      if (typeof body.orderId !== 'string' || !/^\d+$/.test(body.orderId)) throw Error('Order ID required');
+      if (body.operation === 'REDUCE_ORDER' && (typeof body.newRemainingRaw !== 'string' ||
+        !/^\d+$/.test(body.newRemainingRaw))) throw Error('New remaining raw quantity required');
+      const keystore = await readBotKeystore();
+      if (!keystore) { json(response, 409, { status: 'BLOCKED', error: 'Bot keystore missing' }); return; }
+      const remaining = body.operation === 'CANCEL' ? null : body.newRemainingRaw as string;
+      const observation = await inspectOrderAction(body.operation, body.orderId, remaining, keystore.address);
+      const plan = buildOrderActionPlan(observation, body.operation, body.orderId, remaining);
+      const record = await appendBotPlanEvidence(botEvidenceDir, plan);
+      json(response, 200, { ...plan, canary: assessPlanCanary(plan), evidenceHash: record.hash });
     } else if (request.method === 'GET' && path === '/api/v1/bot-execution') {
       const plans = await readBotPlanEvidence(botEvidenceDir);
       const forensic = await readForensicEvidence(botForensicDir);
-      const rows = await Promise.all(plans.filter(p => p.plan.schema === 'perp-canary/delegated-plan/v2')
+      const actions = await readOrderActionForensics(orderActionForensicDir);
+      const rows = await Promise.all(plans.filter(p => ['perp-canary/delegated-plan/v2',
+        'perp-canary/order-action-plan/v1'].includes(p.plan.schema))
         .slice(-20).map(async record => {
-          if (record.plan.schema !== 'perp-canary/delegated-plan/v2') throw Error('Plan schema mismatch');
+          if (record.plan.schema !== 'perp-canary/delegated-plan/v2' &&
+            record.plan.schema !== 'perp-canary/order-action-plan/v1') throw Error('Plan schema mismatch');
           const plan = record.plan;
-          return { plan, history: await readExecutionLedger(botExecutionLedgerDir, plan.intentId),
-            forensic: forensic.filter(f => f.planHash === plan.hash) };
+          return { plan, canary: assessPlanCanary(plan),
+            history: await readExecutionLedger(botExecutionLedgerDir, plan.intentId),
+            forensic: [...forensic, ...actions].filter(f => f.planHash === plan.hash) };
         }));
       json(response, 200, { rows });
     } else if (request.method === 'GET' && path.startsWith('/api/v1/bot-evidence/')) {
       const hash = path.slice('/api/v1/bot-evidence/'.length);
       if (!/^[0-9a-f]{64}$/.test(hash)) throw Error('Invalid evidence hash');
-      const record = (await readForensicEvidence(botForensicDir)).find(item => item.hash === hash);
+      const record = [...await readForensicEvidence(botForensicDir),
+        ...await readOrderActionForensics(orderActionForensicDir)].find(item => item.hash === hash);
       if (!record) { json(response, 404, { error: 'Evidence not found' }); return; }
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
         'content-disposition': `attachment; filename="${hash}.json"`, 'cache-control': 'no-store' });

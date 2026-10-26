@@ -7,5 +7,6 @@
 | M3.0, 2026-10-26 | `docs/m3-bot-foundation.md`; mock keystore и gate тесты; локальная bot-plan SHA-256 цепочка | Encrypted keystore CLI, Bot Connection, read-only delegated plan, signing/broadcast locks | Нет |
 | M3.3, 2026-10-27 | `docs/m3-delegated-execution.md`; 78 mock/fixture tests; LIVE read-only Hideki blocks 34024478 and 34025323 | Owner-confirmed local `placeOrderFor` path, durable intent reservation, receipt forensics and SHA-256 evidence; live `PREPARED` plan construction, no live trade in M3.3 | Нет |
 | M3.3.1, 2026-10-27 | `docs/m3-3-1-preflight-diagnosis.md`; saved plan hash `8b5d51f8609d79c527de185294bdbef1baa4e232d5728a3405629596b721cfd0`; read-only book blocks 34030745 and 34034090 | Proven IOC no-fill revert diagnosis; primary error and dependent gates shown without relaxing safety checks | Нет |
+| M3.4, 2026-10-27 | `docs/m3-4-lifecycle-demo.md`; mock CANCEL/REDUCE_ORDER lifecycle; LIVE read-only Hideki blocks 34043411 and 34043615 | On-chain order discovery, safe order maintenance plans, shared local execution/forensics, Canary risk explanations; position CLOSE correctly blocked | Нет |
 
 Evolution Score остаётся **26**. Это локальное дополнение к Pulse Evolution Bridge, не самостоятельное решение о продвижении. Promotion Gate не выполнялся. Прочтение SDK и документация не повышают score.

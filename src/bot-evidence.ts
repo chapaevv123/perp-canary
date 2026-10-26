@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { canonical, sha256 } from './evidence.ts';
 import type { BotExecutionPlan } from './bot-foundation.ts';
 import { verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
+import { verifyOrderActionPlan, type OrderActionPlan } from './order-actions.ts';
 
 type RecordBody = { schema: 'perp-canary/bot-plan-evidence/v1'; createdAt: string;
-  previousHash: string | null; plan: BotExecutionPlan | PreparedPlan };
+  previousHash: string | null; plan: BotExecutionPlan | PreparedPlan | OrderActionPlan };
 export type BotPlanRecord = RecordBody & { hash: string };
 const pattern = /^bot-plan-\d{13}-[0-9a-f]{12}\.json$/;
 export async function readBotPlanEvidence(dir: string): Promise<BotPlanRecord[]> {
@@ -17,18 +18,20 @@ export async function readBotPlanEvidence(dir: string): Promise<BotPlanRecord[]>
     const { hash, ...body } = record;
     const { hash: planHash, ...planBody } = body.plan;
     if (body.schema !== 'perp-canary/bot-plan-evidence/v1' ||
-      !['perp-canary/bot-execution-plan/v1', 'perp-canary/delegated-plan/v2'].includes(body.plan.schema) ||
+      !['perp-canary/bot-execution-plan/v1', 'perp-canary/delegated-plan/v2',
+        'perp-canary/order-action-plan/v1'].includes(body.plan.schema) ||
       body.previousHash !== previous ||
       hash !== sha256(body) || planHash !== sha256(planBody) ||
       (body.plan.schema === 'perp-canary/bot-execution-plan/v1' && body.plan.status !== 'BLOCKED'))
       throw Error('Bot plan evidence invalid');
     if (body.plan.schema === 'perp-canary/delegated-plan/v2') verifyPreparedPlan(body.plan);
+    if (body.plan.schema === 'perp-canary/order-action-plan/v1') verifyOrderActionPlan(body.plan);
     previous = hash;
   }
   return records;
 }
 let queue: Promise<unknown> = Promise.resolve();
-export function appendBotPlanEvidence(dir: string, plan: BotExecutionPlan | PreparedPlan): Promise<BotPlanRecord> {
+export function appendBotPlanEvidence(dir: string, plan: BotExecutionPlan | PreparedPlan | OrderActionPlan): Promise<BotPlanRecord> {
   const task = queue.then(async () => {
     const history = await readBotPlanEvidence(dir);
     const previousHash = history.at(-1)?.hash ?? null;

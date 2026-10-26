@@ -62,6 +62,43 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
 }
 export type ExecutionOutcome = { state: 'CANCELLED' | 'BLOCKED' | 'UNKNOWN' | 'VERIFIED' | 'AMBER' | 'RED';
   planHash: string; txHash: string | null; reasons: string[]; forensicHash?: string };
+export async function dispatchApprovedTransaction(input: { planHash: string; intentId: string;
+  operator: string; pool: string; data: Hex; gasLimit: string; gasPriceWei: string; nonce: number },
+  ports: Pick<ExecutionPorts, 'sign' | 'verifySigned' | 'broadcastOnce'>,
+  ledger: string, finish: (txHash: Hex) => Promise<{ verdict: 'VERIFIED' | 'AMBER' | 'RED';
+    reasons: string[]; hash: string } | null>): Promise<ExecutionOutcome> {
+  const base = { planHash: input.planHash, txHash: null as string | null };
+  await reserveIntent(ledger, input.intentId, input.planHash);
+  const transaction: TransactionSerializable = { type: 'legacy', chainId: 50383,
+    to: input.pool as `0x${string}`, data: input.data, value: 0n,
+    gas: BigInt(input.gasLimit), gasPrice: BigInt(input.gasPriceWei), nonce: input.nonce };
+  let raw: Hex;
+  try { raw = await ports.sign(transaction, input.operator); }
+  catch { return { ...base, state: 'BLOCKED', reasons: ['Local signing failed; intent remains reserved'] }; }
+  if (!await ports.verifySigned(raw, transaction, input.operator))
+    return { ...base, state: 'BLOCKED', reasons: ['Signed transaction differs from approved plan; intent remains reserved'] };
+  const signedHash = keccak256(raw);
+  await appendExecutionState(ledger, input.intentId, input.planHash, 'SIGNED', signedHash);
+  let submitted: Hex;
+  try { submitted = await ports.broadcastOnce(raw); }
+  catch {
+    await appendExecutionState(ledger, input.intentId, input.planHash, 'BROADCAST_UNKNOWN', signedHash);
+    return { ...base, state: 'UNKNOWN', txHash: signedHash,
+      reasons: ['Broadcast outcome unknown; manually reconcile, never retry automatically'] };
+  }
+  if (!same(submitted, signedHash)) {
+    await appendExecutionState(ledger, input.intentId, input.planHash, 'BROADCAST_UNKNOWN', signedHash);
+    return { ...base, state: 'UNKNOWN', txHash: signedHash, reasons: ['RPC returned a different hash; manually reconcile'] };
+  }
+  await appendExecutionState(ledger, input.intentId, input.planHash, 'BROADCAST_ACCEPTED', signedHash);
+  let result: Awaited<ReturnType<typeof finish>>;
+  try { result = await finish(submitted); } catch { result = null; }
+  if (!result) return { ...base, state: 'UNKNOWN', txHash: signedHash,
+    reasons: ['Receipt or forensic read unavailable; manually reconcile'] };
+  await appendExecutionState(ledger, input.intentId, input.planHash, result.verdict, signedHash);
+  return { ...base, state: result.verdict, txHash: signedHash,
+    reasons: result.reasons, forensicHash: result.hash };
+}
 export async function executeDelegatedPlan(plan: PreparedPlan, ports: ExecutionPorts,
   dirs: { ledger: string; forensics: string }): Promise<ExecutionOutcome> {
   verifyPreparedPlan(plan);
@@ -74,37 +111,16 @@ export async function executeDelegatedPlan(plan: PreparedPlan, ports: ExecutionP
   const second = await gatherPreflight(plan, ports);
   if (!second.passed || second.nonce !== first.nonce) return { ...base, state: 'BLOCKED',
     reasons: [...second.blockers, ...(second.nonce !== first.nonce ? ['Nonce changed before signing'] : [])] };
-  await reserveIntent(dirs.ledger, plan.intentId, plan.hash);
-  const transaction: TransactionSerializable = { type: 'legacy', chainId: 50383,
-    to: plan.pool as `0x${string}`, data: plan.transaction!.data, value: 0n,
-    gas: BigInt(plan.risk.gasLimit), gasPrice: BigInt(second.gasPriceWei), nonce: second.nonce };
-  let raw: Hex;
-  try { raw = await ports.sign(transaction, plan.operator); }
-  catch { return { ...base, state: 'BLOCKED', reasons: ['Local signing failed; intent remains reserved'] }; }
-  if (!await ports.verifySigned(raw, transaction, plan.operator))
-    return { ...base, state: 'BLOCKED', reasons: ['Signed transaction does not match exact plan; intent remains reserved'] };
-  const signedHash = keccak256(raw);
-  await appendExecutionState(dirs.ledger, plan.intentId, plan.hash, 'SIGNED', signedHash);
-  let submitted: Hex;
-  try { submitted = await ports.broadcastOnce(raw); }
-  catch {
-    await appendExecutionState(dirs.ledger, plan.intentId, plan.hash, 'BROADCAST_UNKNOWN', signedHash);
-    return { ...base, state: 'UNKNOWN', txHash: signedHash, reasons: ['Broadcast outcome unknown; manually reconcile, never retry automatically'] };
-  }
-  if (!same(submitted, signedHash)) {
-    await appendExecutionState(dirs.ledger, plan.intentId, plan.hash, 'BROADCAST_UNKNOWN', signedHash);
-    return { ...base, state: 'UNKNOWN', txHash: signedHash, reasons: ['RPC returned a different hash; manually reconcile'] };
-  }
-  await appendExecutionState(dirs.ledger, plan.intentId, plan.hash, 'BROADCAST_ACCEPTED', signedHash);
-  let evidence: Awaited<ReturnType<ExecutionPorts['receiptAndForensics']>>;
-  try { evidence = await ports.receiptAndForensics(submitted); }
-  catch { evidence = null; }
-  if (!evidence) return { ...base, state: 'UNKNOWN', txHash: signedHash,
-    reasons: ['Receipt or forensic read unavailable; manually reconcile'] };
-  const forensic = assessDelegatedTrade(plan, evidence.body, evidence.currentPositionRaw);
-  await saveForensicEvidence(dirs.forensics, forensic);
-  await appendExecutionState(dirs.ledger, plan.intentId, plan.hash, forensic.verdict, signedHash);
-  return { ...base, state: forensic.verdict, txHash: signedHash, reasons: forensic.reasons, forensicHash: forensic.hash };
+  return dispatchApprovedTransaction({ planHash: plan.hash, intentId: plan.intentId,
+    operator: plan.operator, pool: plan.pool, data: plan.transaction!.data,
+    gasLimit: plan.risk.gasLimit, gasPriceWei: second.gasPriceWei, nonce: second.nonce },
+  ports, dirs.ledger, async txHash => {
+    const evidence = await ports.receiptAndForensics(txHash);
+    if (!evidence) return null;
+    const forensic = assessDelegatedTrade(plan, evidence.body, evidence.currentPositionRaw);
+    await saveForensicEvidence(dirs.forensics, forensic);
+    return { verdict: forensic.verdict, reasons: forensic.reasons, hash: forensic.hash };
+  });
 }
 async function gatherPreflight(plan: PreparedPlan, ports: ExecutionPorts): Promise<PreflightState> {
   const fresh = await ports.fresh();

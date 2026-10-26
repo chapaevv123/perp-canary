@@ -74,3 +74,9 @@ The Bot Connection panel reports local public keystore metadata and live Hideki 
 ## M3.3 delegated execution
 
 The Execution Control panel prepares an expiring BTC-PERP `placeOrderFor` plan with a SHA-256 hash after fresh read-only permission, market, margin, gas and simulation checks. The browser cannot sign or send. The separate `npm run bot-execute -- execute <plan-hash>` command is reserved for a later, explicit owner decision: it requires an interactive terminal, exact hash confirmation and local keystore password, then repeats all checks before one Hideki send. Do not run it while reviewing or testing M3.3. An uncertain send stays reserved as `UNKNOWN`; use read-only `npm run bot-execute -- reconcile <plan-hash> <tx-hash>` after inspecting the on-chain transaction. See [M3.3 execution guide](docs/m3-delegated-execution.md).
+
+## M3.4 order lifecycle
+
+Execution Control now reads Wallet 1's on-chain BTC-PERP position and resting orders and prepares separate CANCEL and REDUCE_ORDER plans using the documented `cancelOrderFor` and `reduceOrderFor` calls. The latter changes a resting order, **not an open position**. Both write paths use the same local CLI confirmation, signer, durable intent ledger and receipt evidence as PLACE. Position CLOSE remains blocked until an atomic reduce-only delegated method is proven. See [M3.4 demo and evidence guide](docs/m3-4-lifecycle-demo.md). All M3.4 write stages were tested with fixtures only.
+
+Existing public proof: [M2.5 BTC-PERP transaction evidence](trade-evidence/tx-e164fc656bd996ce7be711a4753bb40f6088f18e8abe7dc60b530fa68d4a79cc.json) is a verified **dreamDEX UI trade**, not a Perp Canary execution. [M2.6 authorization evidence](authorization-evidence/authorization-33989411.json) is a historical read-only grant snapshot. Run `npm run verify` for SHA-256 chain verification; LIVE state must always be read again.
