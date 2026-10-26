@@ -12,6 +12,8 @@ Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and che
 
 **M2.4 network and funding:** The existing dashboard now checks public EOA and trading-wallet balances independently on Hideki 50383, Shannon 50312 and mainnet 5031, verifies each RPC's chain ID, and explains funding readiness, official test routes and unresolved app balances. A LIVE sample found the owner-reported `26.306836 SOMI` amount as a numerical match to Shannon EOA **STT**, while the supplied trading address held Hideki STT and a 1000 USDso MarginBank voucher floor. This does not prove the app token label or account link. See [network and funding intelligence](docs/network-funding-intelligence.md).
 
+**M2.5 live trade forensics:** A supplied public transaction was found only on Hideki. The new read-only dashboard section verifies the transaction, receipt, BTC-PERP market identity, operator calldata, matching fill and trading-wallet position event. A separate committed SHA-256 artifact preserves the raw chain data and bounded call trace; the M0/M1 evidence chains remain intact. See [live trade forensics](docs/live-trade-forensics.md).
+
 ## How it works
 
 ```text

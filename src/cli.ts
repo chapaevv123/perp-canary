@@ -14,8 +14,11 @@ try {
     const snapshots = await readSnapshots(dir);
     const { readExecutionRecords } = await import('./execution-evidence.ts');
     const execution = await readExecutionRecords(resolve('execution-evidence'));
+    const { readTradeArtifacts } = await import('./trade-evidence.ts');
+    const trades = await readTradeArtifacts(resolve('trade-evidence'));
     console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null,
-      executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null }, null, 2));
+      executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null,
+      tradeArtifacts: trades.length, tradeHashes: trades.map(trade => trade.hash) }, null, 2));
   } else {
     throw new Error('Usage: npm run snapshot | npm run verify');
   }

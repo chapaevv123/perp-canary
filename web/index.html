@@ -48,6 +48,10 @@
     <form id="fundingForm"><label>Login wallet / external EOA<input id="fundingEoa" class="mono" placeholder="0x… public address"></label><label>dreamDEX Wallet 1 / trading wallet<input id="fundingTrading" class="mono" placeholder="0x… public address"></label><label>Reported app amount (optional)<input id="fundingAmount" inputmode="decimal" placeholder="26.306836"></label><label>Reported app symbol (optional)<input id="fundingSymbol" placeholder="SOMI"></label><button class="secondary wide" type="submit">Inspect networks and funding</button></form>
     <div id="fundingState" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · Run a read-only inspection.</div><div id="fundingResults"></div>
   </section>
+  <section class="panel" id="tradeForensics"><h2>Live Trade Forensics</h2><p class="sub">Read-only transaction inspection across registered networks. A successful receipt alone does not prove a filled perp order.</p>
+    <form id="forensicsForm"><label class="wide">Public transaction hash<input id="forensicsHash" class="mono" placeholder="0x…" required></label><label class="wide">Expected trading wallet<input id="forensicsWallet" class="mono" placeholder="0x… public address" required></label><button class="secondary wide" type="submit">Inspect existing transaction</button></form>
+    <div id="forensicsState" class="notice" role="status" aria-live="polite" style="margin-top:16px">UNKNOWN · No transaction inspected.</div><div id="forensicsResults"></div>
+  </section>
   <section class="panel"><h2>Evidence Explorer</h2><p class="sub">Plans and reconciliations use a separate local SHA-256 chain. Wallet-linked records stay on this machine and are excluded from Git.</p><div id="records" class="empty">No execution evidence yet.</div></section>
 </main>
 <script>
@@ -68,5 +72,6 @@ loadOverview();loadRecords();
 </script>
 <script src="/wallet.js"></script>
 <script src="/funding.js"></script>
+<script src="/forensics.js"></script>
 </body>
 </html>

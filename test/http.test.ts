@@ -51,3 +51,16 @@ test('funding view rejects HTML and JSON HTTP errors before rendering balances',
   runInNewContext(`${source}\nwindow.read=readFundingJson`, { window: errorWindow, fetch: jsonFetch });
   await assert.rejects(errorWindow.read!({ method: 'POST' }), /RPC read unavailable/);
 });
+
+test('forensics view never parses a stale-server HTML error as JSON', async () => {
+  const script = await readFile('web/forensics.js', 'utf8');
+  const source = script.match(/ {2}async function readForensicsJson\(options\) \{[\s\S]*?\n {2}\}/)?.[0];
+  assert.ok(source);
+  const window: { read?: (options: unknown) => Promise<unknown> } = {};
+  let parsed = 0;
+  const fetch = async () => ({ status: 404, ok: false, headers: { get: () => 'text/html' },
+    text: async () => { parsed++; return '<html>stale route</html>'; } });
+  runInNewContext(`${source}\nwindow.read=readForensicsJson`, { window, fetch });
+  await assert.rejects(window.read!({ method: 'POST' }), /non-JSON HTTP 404/);
+  assert.equal(parsed, 0);
+});

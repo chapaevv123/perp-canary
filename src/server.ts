@@ -9,11 +9,15 @@ import { collectLive } from './live.ts';
 import { PreflightError } from './rpc-health.ts';
 import { inspectWalletArchitecture, WalletDiagnosticsReadError } from './wallet-diagnostics.ts';
 import { collectFundingIntelligence } from './funding-intelligence.ts';
+import { collectTradeForensics } from './trade-forensics.ts';
+import { readTradeArtifacts } from './trade-evidence.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
+const forensicsJsPath = resolve('web/forensics.js');
+const tradeEvidenceDir = resolve('trade-evidence');
 const executionDir = resolve('execution-evidence');
 let refreshing = false;
 const port = Number(process.env.CANARY_PORT ?? 8787);
@@ -86,6 +90,15 @@ createServer(async (request, response) => {
         reportedUiSymbol: typeof body.reportedUiSymbol === 'string' ? body.reportedUiSymbol : undefined,
       });
       json(response, 200, result);
+    } else if (path === '/api/v1/trade-forensics' && request.method !== 'POST') {
+      json(response, 405, { error: 'Use POST /api/v1/trade-forensics with a JSON body' });
+    } else if (request.method === 'POST' && path === '/api/v1/trade-forensics') {
+      const body = await jsonBody(request);
+      const result = await collectTradeForensics({ txHash: typeof body.txHash === 'string' ? body.txHash : '',
+        tradingWallet: typeof body.tradingWallet === 'string' ? body.tradingWallet : '' });
+      const saved = (await readTradeArtifacts(tradeEvidenceDir))
+        .find(artifact => artifact.txHash.toLowerCase() === result.txHash.toLowerCase());
+      json(response, 200, { ...result, savedEvidenceHash: saved?.hash ?? null });
     } else if (request.method === 'POST' && path === '/api/v1/reconcile') {
       const body = await jsonBody(request);
       const records = await readExecutionRecords(executionDir);
@@ -114,6 +127,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/funding.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(fundingJsPath));
+    } else if (request.method === 'GET' && path === '/forensics.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(forensicsJsPath));
     } else if (request.method === 'GET' && (path === '/api/v1/snapshots' || path === '/api/v1/latest')) {
       const history = await readSnapshots(evidenceDir);
       const value = path.endsWith('/latest') ? history.at(-1) ?? null : history;
