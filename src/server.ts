@@ -7,7 +7,7 @@ import { collectPlan, observeReceipt } from './execution-live.ts';
 import { assessExecution, type ExecutionPlan } from './execution.ts';
 import { collectLive } from './live.ts';
 import { PreflightError } from './rpc-health.ts';
-import { inspectWalletArchitecture } from './wallet-diagnostics.ts';
+import { inspectWalletArchitecture, WalletDiagnosticsReadError } from './wallet-diagnostics.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -61,6 +61,8 @@ createServer(async (request, response) => {
         orderId: body.orderId === undefined ? undefined : String(body.orderId) });
       const record = await appendExecutionRecord(executionDir, 'PLAN', plan);
       json(response, 200, { ...record, state: plan.blockers.length ? 'BLOCKED' : 'DRY_RUN_READY' });
+    } else if (path === '/api/v1/wallet-diagnostics' && request.method !== 'POST') {
+      json(response, 405, { error: 'Use POST /api/v1/wallet-diagnostics with a JSON body' });
     } else if (request.method === 'POST' && path === '/api/v1/wallet-diagnostics') {
       const body = await jsonBody(request);
       const result = await inspectWalletArchitecture({
@@ -109,6 +111,8 @@ createServer(async (request, response) => {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ service: 'perp-canary', mode: 'READ_ONLY', evidence: 'LOCAL_VERIFIED_FILES',
         transactionSending: 'DISABLED' }));
+    } else if (path.startsWith('/api/')) {
+      json(response, 404, { error: 'API route not found. Restart the Perp Canary server if this page was just updated.' });
     } else {
       response.writeHead(404); response.end('Not found');
     }
@@ -116,6 +120,8 @@ createServer(async (request, response) => {
     if (error instanceof PreflightError) {
       json(response, 503, { error: error.message, code: error.code, phase: error.phase,
         transport: error.transport, attempts: error.attempts, retryable: true });
+    } else if (error instanceof WalletDiagnosticsReadError) {
+      json(response, 503, { error: error.message, code: 'WALLET_DIAGNOSTICS_UNAVAILABLE', phase: error.phase });
     } else {
       json(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }

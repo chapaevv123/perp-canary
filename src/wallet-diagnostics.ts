@@ -1,6 +1,6 @@
 import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES, orderBookEventsAbi, perpPoolWriteAbi } from '@somnia-chain/markets-sdk';
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
-import { createPublicClient, decodeEventLog, decodeFunctionData, formatUnits, http, isAddress, type Address, type Hex } from 'viem';
+import { createPublicClient, decodeEventLog, decodeFunctionData, formatUnits, getAddress, http, isAddress, type Address, type Hex } from 'viem';
 import { RPC, readRpcHead } from './rpc-health.ts';
 import { withSnapshotSdk } from './lifecycle.ts';
 
@@ -15,6 +15,18 @@ const SAFE_IS_OWNER = [{ type: 'function', name: 'isOwner', stateMutability: 'vi
 export type Fact = { value: string; status: 'CONFIRMED' | 'SUPPLIED' | 'UNKNOWN'; source: string };
 export const unknown = (source: string): Fact => ({ value: 'UNKNOWN', status: 'UNKNOWN', source });
 const confirmed = (value: string, source: string): Fact => ({ value, status: 'CONFIRMED', source });
+export class WalletDiagnosticsReadError extends Error {
+  readonly phase: string;
+  constructor(phase: string) {
+    super(`Wallet diagnostics read unavailable during ${phase}; no balance should be inferred`);
+    this.name = 'WalletDiagnosticsReadError';
+    this.phase = phase;
+  }
+}
+export function canonicalWalletAddress(value: string, label: string): Address {
+  if (!isAddress(value, { strict: false })) throw new Error(`${label} must be an EVM address`);
+  return getAddress(value);
+}
 
 export function walletRoles(eoa: string | undefined, trading: string | undefined): {
   connectedEoa: Fact; tradingAccount: Fact; executionSigner: Fact; gasPayer: Fact; collateralOwner: Fact; relationship: Fact;
@@ -33,18 +45,18 @@ export function walletRoles(eoa: string | undefined, trading: string | undefined
 }
 
 export async function inspectWalletArchitecture(input: { eoa?: string; tradingAccount?: string; pool: string; txHash?: string }) {
-  if (input.eoa && !isAddress(input.eoa)) throw new Error('EOA must be an EVM address');
-  if (input.tradingAccount && !isAddress(input.tradingAccount)) throw new Error('Trading account must be an EVM address');
-  if (!isAddress(input.pool)) throw new Error('Choose a valid perp pool');
   if (input.txHash && !TX_HASH.test(input.txHash)) throw new Error('Transaction hash must be 0x plus 64 hex characters');
   if (!input.eoa && !input.tradingAccount && !input.txHash) throw new Error('Enter an EOA, trading account or transaction hash');
+  input = { ...input, eoa: input.eoa ? canonicalWalletAddress(input.eoa, 'EOA') : undefined,
+    tradingAccount: input.tradingAccount ? canonicalWalletAddress(input.tradingAccount, 'Trading account') : undefined,
+    pool: canonicalWalletAddress(input.pool, 'Perp pool') };
   const head = await readRpcHead();
   const roles = walletRoles(input.eoa, input.tradingAccount);
   const controller = new AbortController();
   const sdk = new SomniaMarkets({ chain: hidekiTestnet, wsRpcUrl: WSS, indexerUrl: INDEXER,
     addresses: SOMNIA_HIDEKI_TESTNET_ADDRESSES, signal: controller.signal });
   let phase = 'reading selected market';
-  return withSnapshotSdk(sdk, controller, async () => {
+  try { return await withSnapshotSdk(sdk, controller, async () => {
     const market = (await sdk.client.listPerpMarkets()).find(row => row.poolAddress.toLowerCase() === input.pool.toLowerCase());
     if (!market) throw new Error('Pool is absent from current perp market rows');
     const system = await sdk.client.getPerpSystemConfig(market.marginBank);
@@ -74,6 +86,8 @@ export async function inspectWalletArchitecture(input: { eoa?: string; tradingAc
           `Markets SDK getMarginAccount; block ${margin.asOfBlock}`),
         positionSize: confirmed(formatUnits(position.size, market.baseDecimals),
           `Markets SDK getPerpPosition; pool ${market.poolAddress}`),
+        activePerpPools: confirmed(margin.activePerpPools.length ? margin.activePerpPools.join(', ') : 'none',
+          `Markets SDK getMarginAccount; active perp pools across markets; block ${margin.asOfBlock}`),
         openOrdersObserved: portfolio,
         marginStatus: confirmed(margin.marginStatus, `Markets SDK getMarginAccount; block ${margin.asOfBlock}`),
       });
@@ -105,7 +119,11 @@ export async function inspectWalletArchitecture(input: { eoa?: string; tradingAc
       limitations: ['The two account balances are independent and are never combined.',
         'A user-supplied trading address is not proof that it belongs to the connected EOA or dreamDEX login.',
         'MarginBank and position reads are current reads, not pinned to the sampled block or transaction receipt.'] };
-  }, () => phase, 90_000);
+  }, () => phase, 90_000); }
+  catch (error) {
+    if (error instanceof Error && error.message === 'Pool is absent from current perp market rows') throw error;
+    throw new WalletDiagnosticsReadError(phase);
+  }
 }
 
 export async function inspectTransaction(txHash: Hex, pool: string) {
