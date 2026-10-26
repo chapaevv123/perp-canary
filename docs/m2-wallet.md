@@ -2,6 +2,12 @@
 
 M2 extends the existing local page. It has not submitted or reconciled an owner transaction. The server has no private key and no transaction-send endpoint.
 
+## M2.1 RPC preflight recovery
+
+The SDK 0.32.1 public client uses an owned WebSocket for on-chain reads. Its ordinary RPC response deadline is four seconds and it does not retry internally. The former preflight called `getBlockNumber()` through this WSS client; a successful `eth_blockNumber` call over HTTPS therefore did not establish that the WSS request would meet its deadline.
+
+Preflight now samples Hideki chain ID and block through a 15-second HTTPS read, with one read-only retry on timeout. SDK market, account and risk reads still use the owned WSS client; a timed-out read-only preflight is retried once with a new SDK instance after cleanup. Errors expose a bounded code, phase, transport and attempt count, without raw RPC payloads or account data. A failed preflight clears the wallet-review action and creates no send-ready plan. No retry applies to `eth_sendTransaction`.
+
 ## Verified implementation
 
 1. EIP-6963 provider discovery lists MetaMask and Rabby when installed; legacy injected providers are a fallback. Connection requests only a public account. The wallet must report Hideki chain ID `50383`. Account or chain changes invalidate the pending plan.

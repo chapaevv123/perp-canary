@@ -46,7 +46,11 @@
     const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'HTTP ' + response.status);
+    if (!response.ok) {
+      const error = new Error(result.error || 'HTTP ' + response.status);
+      error.code = result.code || 'REQUEST_FAILED';
+      throw error;
+    }
     return result;
   }
   byId('connectWallet').onclick = async () => {
@@ -77,6 +81,8 @@
   byId('planForm').onsubmit = async event => {
     event.preventDefault();
     invalidate('Running fresh read-only preflight.');
+    byId('planHash').value = '';
+    byId('planDetail').hidden = true;
     const operation = byId('operation').value;
     const request = { operation, account: byId('account').value.trim(), pool: byId('pool').value,
       isBid: byId('side').value === 'buy', price: byId('price').value.trim(),
@@ -84,6 +90,15 @@
     if (operation === 'CANCEL') { delete request.price; delete request.quantity; }
     if (operation === 'CLOSE' && !request.quantity) delete request.quantity;
     try {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(request.account) || !/^0x[0-9a-fA-F]{40}$/.test(request.pool))
+        throw new Error('Enter a public EVM account and choose a market.');
+      if (operation !== 'CANCEL' && (!/^\d{1,24}(?:\.\d{1,24})?$/.test(request.price) ||
+          /^0+(?:\.0+)?$/.test(request.price) ||
+          (request.quantity !== undefined && (!/^\d{1,24}(?:\.\d{1,24})?$/.test(request.quantity) ||
+            /^0+(?:\.0+)?$/.test(request.quantity)))))
+        throw new Error('Enter positive decimal price and quantity.');
+      if (operation === 'CANCEL' && !/^\d{1,39}$/.test(request.orderId))
+        throw new Error('Enter a decimal resting order ID.');
       byId('planOutput').textContent = 'Reading current Hideki market, wallet and margin state…';
       const record = await api('/api/v1/plan', request);
       const plan = record.payload;
@@ -103,19 +118,22 @@
       await loadRecords();
     } catch (error) {
       byId('planOutput').className = 'notice error';
-      byId('planOutput').textContent = error.message;
+      byId('planOutput').textContent = (error.code === 'RPC_TIMEOUT' ? 'RPC_TIMEOUT · read-only preflight unavailable · ' : 'PREFLIGHT FAILED · ') + error.message;
+      byId('sendState').textContent = 'No transaction requested. Correct the input or retry read-only preflight.';
     }
   };
 
   byId('reviewWallet').onclick = async () => {
     if (requestOpen) return;
     requestOpen = true;
+    let walletRequestStarted = false;
     const button = byId('reviewWallet');
     button.disabled = true;
     try {
       const chosen = wallet;
       const first = active;
       const request = input;
+      invalidate('Repeating read-only preflight before wallet review.');
       if (!chosen || !first || !request || request.operation !== 'PLACE') throw new Error('Connect a wallet and make a PLACE plan first');
       if (chosen.account.toLowerCase() !== request.account.toLowerCase()) throw new Error('Connected wallet differs from the plan account');
       if (await chainId(chosen.provider) !== 50383) throw new Error('Wallet is no longer on Hideki 50383');
@@ -136,6 +154,7 @@
       if (!window.confirm(summary)) { byId('sendState').textContent = 'Cancelled before wallet request.'; return; }
       if (wallet !== chosen || await chainId(chosen.provider) !== 50383) throw new Error('Wallet account or network changed before submission');
       invalidate('Wallet request pending. Check wallet history before any retry.');
+      walletRequestStarted = true;
       const txHash = await chosen.provider.request({ method: 'eth_sendTransaction', params: [{
         from: chosen.account, to: plan.unsigned.to, data: plan.unsigned.data, value: '0x0',
         gas: '0x989680', chainId: '0xc4cf'
@@ -160,7 +179,8 @@
       byId('sendState').textContent = 'Receipt pending or read failed. Plan ' + fresh.hash +
         ', tx ' + txHash + '. Import the hash later in Order Lifecycle.';
     } catch (error) {
-      byId('sendState').textContent = error.message + '. If a wallet request opened, check its history before retrying.';
+      byId('sendState').textContent = (error.code === 'RPC_TIMEOUT' ? 'RPC_TIMEOUT · ' : '') + error.message +
+        (walletRequestStarted ? '. Check transaction history before any new request.' : '. No new wallet request was made by this preflight.');
     } finally {
       button.disabled = false;
       requestOpen = false;

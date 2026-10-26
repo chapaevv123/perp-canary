@@ -8,6 +8,8 @@ Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and che
 
 **M2 preparation:** The same UI discovers MetaMask/Rabby, checks Hideki chain ID, STT, USDso, MarginBank health, market restrictions, SDK margin/size previews and gas simulation. `buildPlacePerpOrder` produces unsigned calldata. The owner may separately authorize each testnet send in the browser wallet; none has been sent or verified here. See [wallet and execution flow](docs/m2-wallet.md).
 
+**M2.2 wallet audit:** Read-only Wallet Architecture Diagnostics now separates the connected EOA from a user-supplied dreamDEX trading wallet, reads each address's Hideki balances, MarginBank state, position and indexed orders, and inspects an existing transaction hash for pool owner events. Missing account links remain `UNKNOWN`. The M2 direct EOA order path does not sign for an app-managed wallet. See [wallet architecture audit](docs/wallet-architecture-audit.md).
+
 ## How it works
 
 ```text

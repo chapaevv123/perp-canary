@@ -3,11 +3,11 @@ import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { createWalletClient, decodeEventLog, decodeFunctionData, formatUnits, http, isAddress, parseUnits, type Address, type Hex } from 'viem';
 import { normalize } from './evidence.ts';
 import { withSnapshotSdk } from './lifecycle.ts';
+import { RPC, PreflightError, isTimeout, readRpcHead } from './rpc-health.ts';
 import type { ExecutionPlan, Operation, ReceiptObservation } from './execution.ts';
 
 const INDEXER = 'https://hideki-dev.smk.somnia.host/v1/graphql';
 const WSS = 'wss://api.hideki2.infra.testnet.somnia.network/ws';
-const RPC = 'https://api.hideki2.infra.testnet.somnia.network';
 const ORDER_GAS_LIMIT = 10_000_000n;
 const ERC20_BALANCE = [{ type: 'function', name: 'balanceOf', stateMutability: 'view',
   inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] }] as const;
@@ -31,13 +31,38 @@ function positiveUnits(value: string | undefined, decimals: number, label: strin
 export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
   if (!['PLACE', 'CANCEL', 'CLOSE'].includes(input.operation)) throw new Error('Unsupported operation');
   if (!isAddress(input.account) || !isAddress(input.pool)) throw new Error('Account and pool must be EVM addresses');
+  if (input.operation === 'PLACE' && typeof input.isBid !== 'boolean') throw new Error('Side is required');
+  if (input.operation === 'CANCEL' && (!input.orderId || !UINT.test(input.orderId)))
+    throw new Error('A decimal orderId is required for cancel');
+  if (input.operation !== 'CANCEL') {
+    if (!input.price || !/^\d{1,24}(?:\.\d{1,24})?$/.test(input.price)) throw new Error('Invalid price; use a positive decimal amount');
+    if (/^0+(?:\.0+)?$/.test(input.price)) throw new Error('Price must be positive');
+    if ((input.operation === 'PLACE' || input.quantity) &&
+      (!input.quantity || !/^\d{1,24}(?:\.\d{1,24})?$/.test(input.quantity)))
+      throw new Error('Invalid quantity; use a positive decimal amount');
+    if (input.quantity && /^0+(?:\.0+)?$/.test(input.quantity)) throw new Error('Quantity must be positive');
+  }
+  const { blockNumber } = await readRpcHead();
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try { return await collectPlanSdk(input, blockNumber); }
+    catch (error) {
+      if (isTimeout(error) || (error instanceof PreflightError && error.code === 'RPC_TIMEOUT')) {
+        if (attempt === 1) continue;
+        throw new PreflightError('RPC_TIMEOUT', error instanceof PreflightError ? error.phase : 'SDK preflight', 'WSS', attempt);
+      }
+      throw error;
+    }
+  }
+  throw new PreflightError('RPC_READ_FAILED', 'SDK market/account preflight', 'WSS', 2);
+}
+
+async function collectPlanSdk(input: PlanInput, blockNumber: string): Promise<ExecutionPlan> {
   const controller = new AbortController();
   const sdk = sdkWithSignal(controller);
-  let phase = 'checking Hideki chain';
-  return withSnapshotSdk(sdk, controller, async () => {
-    const chainId = await sdk.client.getViemClient().getChainId();
-    if (chainId !== 50383) throw new Error(`Wrong chain ID ${chainId}`);
-    const blockNumber = (await sdk.client.getViemClient().getBlockNumber()).toString();
+  let phase = 'checking SDK WSS chain';
+  try { return await withSnapshotSdk(sdk, controller, async () => {
+    const sdkChainId = await sdk.client.getViemClient().getChainId();
+    if (sdkChainId !== 50383) throw new Error(`Wrong SDK WSS chain ID ${sdkChainId}`);
     phase = 'loading perp market';
     const market = (await sdk.client.listPerpMarkets()).find(row => row.poolAddress.toLowerCase() === input.pool.toLowerCase());
     if (!market) throw new Error('Pool is absent from current perp market rows');
@@ -145,6 +170,7 @@ export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
         if (gas > ORDER_GAS_LIMIT) blockers.push('Estimated order gas exceeds the 10M gas safety limit');
         if (gasWei < estimatedGasCostWei) blockers.push('Wallet STT is below the estimated transaction gas cost');
       } catch (error) {
+        if (isTimeout(error)) throw error;
         blockers.push('RPC gas simulation failed; order cannot be offered to the wallet');
         warnings.push(`Gas simulation error: ${error instanceof Error ? error.name : 'UNKNOWN'}`);
       }
@@ -165,7 +191,13 @@ export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
         estimatedGas: estimatedGas?.toString() ?? null, gasLimit: estimatedGas === null ? null : ORDER_GAS_LIMIT.toString(),
         estimatedGasCostWei: estimatedGasCostWei?.toString() ?? null },
       unsigned, blockers, warnings, method: input.operation === 'CANCEL' ? 'cancelOrder' : 'placePerpOrder', sendEnabled: false };
-  }, () => phase);
+  }, () => phase); }
+  catch (error) {
+    if (isTimeout(error)) throw new PreflightError('RPC_TIMEOUT', phase, 'WSS', 1);
+    if (error instanceof Error && /Rpc|WebSocket|HttpRequest/i.test(error.name))
+      throw new PreflightError('RPC_READ_FAILED', phase, 'WSS', 1);
+    throw error;
+  }
 }
 
 export async function observeReceipt(plan: ExecutionPlan, txHash: string): Promise<ReceiptObservation> {

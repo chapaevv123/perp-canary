@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
-async function harness(chain: number, confirm: boolean) {
+async function harness(chain: number, confirm: boolean, failPlanNumber = 0) {
   const calls: string[] = [];
   const sent: unknown[] = [];
   const nodes = new Map<string, Record<string, unknown>>();
@@ -36,10 +36,15 @@ async function harness(chain: number, confirm: boolean) {
   const context = { document: { getElementById: node, createElement: () => ({ value: '', textContent: '' }) },
     window: { ethereum: provider, addEventListener() { /* EIP-6963 */ }, dispatchEvent() { /* EIP-6963 */ },
       confirm: () => confirm }, Event: class {}, setTimeout: (callback: () => void) => callback(),
-    fetch: async (path: string) => ({ ok: true, json: async () => {
-      if (path === '/api/v1/plan') return { state: 'DRY_RUN_READY', hash: 'hash-' + (++plans), payload: plan };
-      return { payload: { assessment: { verdict: 'GREEN', reasons: [] } }, hash: 'record' };
-    } }), loadRecords: async () => undefined, showComparison: () => undefined };
+    fetch: async (path: string) => {
+      if (path === '/api/v1/plan') {
+        plans++;
+        if (plans === failPlanNumber) return { ok: false, json: async () => ({ code: 'RPC_TIMEOUT',
+          error: 'RPC_TIMEOUT during reading position via WSS after 2 read attempt(s)' }) };
+        return { ok: true, json: async () => ({ state: 'DRY_RUN_READY', hash: 'hash-' + plans, payload: plan }) };
+      }
+      return { ok: true, json: async () => ({ payload: { assessment: { verdict: 'GREEN', reasons: [] } }, hash: 'record' }) };
+    }, loadRecords: async () => undefined, showComparison: () => undefined };
   const code = await readFile(join('web', 'wallet.js'), 'utf8');
   runInNewContext(code, context);
   return { node, calls, sent };
@@ -73,4 +78,23 @@ test('explicit owner and mocked wallet confirmation request a single transaction
     to: '0x2222222222222222222222222222222222222222',
     data: '0x12345678', value: '0x0', gas: '0x989680', chainId: '0xc4cf',
   });
+});
+
+test('timeout on fresh preflight removes wallet review and makes no send request', async () => {
+  const app = await harness(50383, true, 2);
+  await (app.node('connectWallet').onclick as () => Promise<void>)();
+  await (app.node('planForm').onsubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
+  assert.equal(app.node('reviewWallet').hidden, false);
+  await (app.node('reviewWallet').onclick as () => Promise<void>)();
+  assert.equal(app.node('reviewWallet').hidden, true);
+  assert.match(String(app.node('sendState').textContent), /RPC_TIMEOUT/);
+  assert.equal(app.calls.includes('eth_sendTransaction'), false);
+});
+
+test('invalid input is rejected before network preflight', async () => {
+  const app = await harness(50383, true);
+  Object.assign(app.node('account'), { value: 'not an address' });
+  await (app.node('planForm').onsubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
+  assert.match(String(app.node('planOutput').textContent), /PREFLIGHT FAILED/);
+  assert.equal(app.node('reviewWallet').hidden, true);
 });

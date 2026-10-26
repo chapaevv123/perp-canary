@@ -35,11 +35,17 @@ test('resting order and exact close have bounded GREEN verdicts with unknown fee
 
 test('reverts, wrong target, overfill and limit breach are RED; stale baseline is AMBER', () => {
   assert.equal(assessExecution(plan, { ...receipt, status: 'reverted' }).verdict, 'RED');
-  assert.equal(assessExecution(plan, { ...receipt, to: bank }).verdict, 'RED');
+  assert.equal(assessExecution(plan, { ...receipt, to: bank, placedOrderIds: [] }).verdict, 'RED');
   assert.equal(assessExecution(plan, { ...receipt, fills: [{ quantity: '11', price: '100', takerOrderId: '1' }] }).verdict, 'RED');
   assert.equal(assessExecution(plan, { ...receipt, fills: [{ quantity: '5', price: '101', takerOrderId: '1' }] }).verdict, 'RED');
   assert.equal(assessExecution(plan, { ...receipt, fills: [{ quantity: '5', price: '100', takerOrderId: '1' }],
     positionEvents: [{ account, pool, newSize: '2' }] }).verdict, 'AMBER');
+});
+
+test('contract-mediated app receipt with pool event stays AMBER until inner call is proven', () => {
+  const mediated = assessExecution(plan, { ...receipt, to: bank, from: bank, call: null });
+  assert.equal(mediated.verdict, 'AMBER');
+  assert.match(mediated.reasons.join(' '), /Contract-mediated route/);
 });
 
 test('missing lifecycle event is AMBER and cancel requires matching order id', () => {

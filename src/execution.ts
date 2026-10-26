@@ -62,7 +62,11 @@ export function assessExecution(plan: ExecutionPlan, receipt: ReceiptObservation
   if (plan.blockers.length) amber.push('Plan had blockers before execution');
   if (receipt.chainId !== 50383) red.push('Receipt came from the wrong chain');
   if (receipt.status === 'reverted') red.push('Transaction reverted');
-  if (receipt.to?.toLowerCase() !== plan.pool.toLowerCase()) red.push('Transaction target differs from planned pool');
+  if (receipt.to?.toLowerCase() !== plan.pool.toLowerCase()) {
+    if (receipt.placedOrderIds.length || receipt.fills.length || receipt.positionEvents.length)
+      amber.push('Contract-mediated route has pool or MarginBank activity, but inner call and signer are not verified');
+    else red.push('Transaction target differs from planned pool');
+  }
   if (!receipt.call) amber.push('Pool transaction calldata could not be decoded as a supported order action');
   else if (plan.operation === 'CANCEL') {
     if (receipt.call.method !== 'cancelOrder' || receipt.call.orderId !== plan.request.orderId) {
