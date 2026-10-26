@@ -14,7 +14,7 @@ The SDK's `placePerpOrder` send verb exists but is not called by this build. Its
 
 ## Owner's first testnet trade
 
-Run `npm.cmd run serve`, open the local page, connect MetaMask or Rabby on Hideki, choose a market and enter a small limit order. Run preflight and inspect every blocker, the market's raw units and the unsigned call. A funded wallet needs STT for gas and sufficient USDso in MarginBank or supported wallet auto-pull; paper USDso may restrict the market. Whitelist eligibility must be confirmed separately with the organizer. Do not approve the wallet prompt until the owner has separately authorized that exact test transaction.
+Run `npm.cmd run serve`, open the local page, connect MetaMask or Rabby on Hideki, choose a market and enter the minimum grid-aligned quantity at a crossing limit price. Run preflight and inspect every blocker, the market's raw units and the unsigned call. A funded wallet needs STT for gas and sufficient USDso already in MarginBank; this build does not assess wallet auto-pull or token allowance, so the wallet USDso figure is informational. Paper USDso may restrict the market. Whitelist eligibility must be confirmed separately with the organizer. Do not approve the wallet prompt until the owner has separately authorized that exact test transaction.
 
 After a transaction, keep its hash and verify the receipt/evidence in Order Lifecycle. A GREEN verdict is bounded to fields observed by this verifier; it does not prove profit or whitelist status. Protocol fee and true slippage remain `NOT_MEASURED`; the position read can occur after the receipt block.
 
