@@ -1,6 +1,6 @@
 # Execution Integrity M1
 
-This is an increment to the existing local app. It is a read-only planner and receipt verifier, not an order sender. The three M0 snapshots and their SHA-256 chain remain unchanged. New plans and reconciliations use `execution-evidence/`, a separate local hash chain excluded from Git because account addresses and transaction hashes can identify a user.
+This documents the M1 read-only planner and receipt verifier. M2 adds a separately confirmed browser-wallet PLACE path, described in [M2 wallet flow](m2-wallet.md). The three M0 snapshots and their SHA-256 chain remain unchanged. New plans and reconciliations use `execution-evidence/`, a separate local hash chain excluded from Git because account addresses and transaction hashes can identify a user.
 
 ## Confirmed SDK 0.32.1 surface
 
@@ -18,11 +18,11 @@ This is an increment to the existing local app. It is a read-only planner and re
 
 Official network and contract references: [dreamDEX developer guide](https://app.testnet.dreamdex.io/docs/developers/perps-testnet), [Somnia SDK perp guide](https://prd.smk.somnia.host/docs/typescript/perps). Hideki is chain `50383`; the app verifies it before planning or importing a receipt. Per-market pool and MarginBank addresses come from SDK rows, not hardcoded guesses.
 
-## Manual path, with transaction sending disabled
+## M1 read-only manual path
 
 1. Open the local app with `npm.cmd run serve`; optionally connect a local wallet address. The browser asks only for the public address and requires chain `50383`.
 2. Capture a current snapshot, choose a market and run a PLACE dry-run. Enter a limit price on the market tick grid and a quantity on its lot grid. The SDK checks tradeability, feed, current position, margin preview and placeable maximum. The plan records raw SDK parameters, blockers, warnings and a hash.
-3. If the owner separately authorizes a testnet send, use a wallet-controlled dreamDEX flow and manually approve that exact order. This app contains no send endpoint. Paste its transaction hash into the app to verify the receipt and contract events against the saved plan.
+3. M2 can now build an unsigned PLACE order and offer it to a browser wallet after a fresh preflight and explicit user decision. The server has no send endpoint. A transaction is sent only if the owner confirms the wallet prompt. Paste its hash into the app if automatic receipt polling is still pending.
 4. For a resting order, make a CANCEL plan with its order ID and inspect the on-chain owner and remaining quantity. A later manually approved cancellation can be reconciled by hash.
 5. For an open position, make a CLOSE plan. The side is opposite the current signed position. A close limit order has **no reduce-only guarantee** in this SDK surface; recheck the position immediately before any manual signature. Import the close receipt and inspect fill and position events.
 

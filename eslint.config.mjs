@@ -14,4 +14,12 @@ export default [
       },
     },
   },
+  {
+    files: ['web/*.js'],
+    languageOptions: { globals: {
+      document: 'readonly', window: 'readonly', Event: 'readonly',
+      setTimeout: 'readonly', fetch: 'readonly',
+      loadRecords: 'readonly', showComparison: 'readonly',
+    } },
+  },
 ];

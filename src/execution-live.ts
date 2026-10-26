@@ -1,12 +1,16 @@
 import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES, orderBookEventsAbi, perpPoolEventsAbi, marginBankEventsAbi, perpPoolWriteAbi } from '@somnia-chain/markets-sdk';
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
-import { decodeEventLog, decodeFunctionData, isAddress, parseUnits, type Address, type Hex } from 'viem';
+import { createWalletClient, decodeEventLog, decodeFunctionData, formatUnits, http, isAddress, parseUnits, type Address, type Hex } from 'viem';
 import { normalize } from './evidence.ts';
 import { withSnapshotSdk } from './lifecycle.ts';
 import type { ExecutionPlan, Operation, ReceiptObservation } from './execution.ts';
 
 const INDEXER = 'https://hideki-dev.smk.somnia.host/v1/graphql';
 const WSS = 'wss://api.hideki2.infra.testnet.somnia.network/ws';
+const RPC = 'https://api.hideki2.infra.testnet.somnia.network';
+const ORDER_GAS_LIMIT = 10_000_000n;
+const ERC20_BALANCE = [{ type: 'function', name: 'balanceOf', stateMutability: 'view',
+  inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] }] as const;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const UINT = /^\d{1,39}$/;
 type PlanInput = { operation: Operation; account: string; pool: string; isBid?: boolean;
@@ -44,18 +48,37 @@ export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
     const feed = await sdk.client.getPerpFeedStatus(market.poolAddress);
     const position = await sdk.client.getPerpPosition({ marginBank: market.marginBank,
       account: input.account as Address, pool: market.poolAddress });
+    phase = 'reading wallet gas, collateral and MarginBank state';
+    const [gasWei, walletCollateral, margin, voucherEligibility] = await Promise.all([
+      sdk.client.getViemClient().getBalance({ address: input.account as Address }),
+      sdk.client.getViemClient().readContract({ address: system.collateralToken, abi: ERC20_BALANCE,
+        functionName: 'balanceOf', args: [input.account as Address] }),
+      sdk.client.getMarginAccount(market.marginBank, input.account as Address),
+      sdk.client.getPerpVoucherEligibility(market.marginBank, input.account as Address)
+        .catch(error => ({ status: 'NOT_AVAILABLE', reason: error instanceof Error ? error.name : 'READ_FAILED' })),
+    ]);
     const blockers: string[] = [];
     const warnings: string[] = ['Market, feed, position, and RPC block were read sequentially, not atomically'];
+    if (gasWei === 0n) blockers.push('Wallet has no STT for transaction gas');
+    if (!system.fullyWired) blockers.push('Perp system is not fully wired');
+    if (market.quoteToken.toLowerCase() !== system.collateralToken.toLowerCase()) blockers.push('Market collateral differs from MarginBank collateral');
+    if (input.operation === 'PLACE' && margin.marginStatus !== 'Healthy') blockers.push(`Margin account is ${margin.marginStatus}`);
+    warnings.push('Contest whitelist status cannot be verified through this SDK; trading restrictions are checked separately');
     if (!status?.registered) blockers.push('Pool is not registered by the factory');
     if (input.operation === 'PLACE' && !status?.tradeable) blockers.push('Pool is not tradeable at observation time');
     if (input.operation !== 'CANCEL' && (!feed.markPriceOk || feed.markPrice === 0n)) blockers.push('Mark feed is unavailable');
     const lot = BigInt(market.lotSize);
     const tick = BigInt(market.tickSize);
+    if (lot <= 0n || tick <= 0n) throw new Error('Market tick or lot size is invalid');
+    const minimumTestQuantity = (BigInt(market.minQuantity) + lot - 1n) / lot * lot;
     let isBid: boolean | null = null;
     let price: bigint | null = null;
     let quantity: bigint | null = null;
     let orderId: string | null = null;
     let preview: Record<string, unknown> | null = null;
+    let unsigned: ExecutionPlan['unsigned'];
+    let estimatedGas: bigint | null = null;
+    let estimatedGasCostWei: bigint | null = null;
     if (input.operation === 'CANCEL') {
       if (!input.orderId || !UINT.test(input.orderId)) throw new Error('A decimal orderId is required for cancel');
       orderId = input.orderId;
@@ -78,6 +101,9 @@ export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
       if (input.operation === 'CLOSE') warnings.push('The SDK limit order has no reduce-only guarantee; recheck position immediately before manual signing');
       if (quantity <= 0n || quantity % lot !== 0n) blockers.push('Quantity does not meet the lot grid');
       if (quantity < BigInt(market.minQuantity)) blockers.push('Quantity is below the pool minimum');
+      if (input.operation === 'PLACE' && quantity > minimumTestQuantity) {
+        blockers.push(`M2 IOC wallet order is capped at ${formatUnits(minimumTestQuantity, market.baseDecimals)} base units`);
+      }
       if (price % tick !== 0n) blockers.push('Price does not meet the tick grid');
       if (input.operation === 'CLOSE' && quantity > (position.size < 0n ? -position.size : position.size)) {
         blockers.push('Close quantity exceeds current position size');
@@ -96,13 +122,49 @@ export async function collectPlan(input: PlanInput): Promise<ExecutionPlan> {
         preview = { margin: normalize(margin), maximum: normalize(maximum) };
       } else warnings.push('SDK preview skipped until quantity and price match the market grid');
     }
+    if (input.operation === 'PLACE' && blockers.length === 0 && isBid !== null && price !== null && quantity !== null) {
+      phase = 'building unsigned perp order with Markets SDK';
+      const walletClient = createWalletClient({ account: input.account as Address, chain: hidekiTestnet,
+        transport: http(RPC) });
+      const trader = sdk.client.createTrader({ walletClient });
+      const built = await trader.buildPlacePerpOrder({ pool: market.poolAddress, isBid, price, quantity,
+        orderType: 2 });
+      if (built.approval || built.order.chainId !== 50383 || built.order.to.toLowerCase() !== market.poolAddress.toLowerCase()
+        || built.order.value !== 0n) throw new Error('SDK unsigned perp call failed safety checks');
+      unsigned = { chainId: 50383, to: built.order.to, data: built.order.data,
+        value: built.order.value.toString(), description: built.order.description };
+      phase = 'simulating gas for the unsigned order';
+      try {
+        const [gas, gasPrice] = await Promise.all([
+          sdk.client.getViemClient().estimateGas({ account: input.account as Address,
+            to: built.order.to, data: built.order.data, value: 0n }),
+          sdk.client.getViemClient().getGasPrice(),
+        ]);
+        estimatedGas = gas;
+        estimatedGasCostWei = ORDER_GAS_LIMIT * gasPrice;
+        if (gas > ORDER_GAS_LIMIT) blockers.push('Estimated order gas exceeds the 10M gas safety limit');
+        if (gasWei < estimatedGasCostWei) blockers.push('Wallet STT is below the estimated transaction gas cost');
+      } catch (error) {
+        blockers.push('RPC gas simulation failed; order cannot be offered to the wallet');
+        warnings.push(`Gas simulation error: ${error instanceof Error ? error.name : 'UNKNOWN'}`);
+      }
+      if (blockers.length) unsigned = undefined;
+    }
     return { schema: 'perp-canary/plan/v1', tier: 'LIVE', observedAt: new Date().toISOString(), chainId: 50383,
       operation: input.operation, account: input.account, pool: market.poolAddress, marginBank: market.marginBank,
       symbol: `${market.baseSymbol ?? 'UNKNOWN'}-PERP`,
       baseline: { blockNumber, positionSize: position.size.toString(), feedGate: feed.markPriceOk ? 'GREEN' : 'RED',
         markPrice: feed.markPrice?.toString() ?? null, consistency: 'SEQUENTIAL_READS_NOT_PINNED' },
-      request: { isBid, price: price?.toString() ?? null, quantity: quantity?.toString() ?? null, orderId },
-      preview, blockers, warnings, method: input.operation === 'CANCEL' ? 'cancelOrder' : 'placePerpOrder', sendEnabled: false };
+      request: { isBid, price: price?.toString() ?? null, quantity: quantity?.toString() ?? null, orderId,
+        orderType: input.operation === 'PLACE' ? 2 : null },
+      preview, wallet: { gasWei: gasWei.toString(), gasSTT: formatUnits(gasWei, 18), collateralToken: system.collateralToken,
+        walletCollateral: walletCollateral.toString(), walletCollateralHuman: formatUnits(walletCollateral, market.quoteDecimals),
+        unlockedMarginHuman: formatUnits(margin.unlockedCollateralBalance, market.quoteDecimals),
+        margin: normalize(margin) as Record<string, unknown>,
+        voucherEligibility: normalize(voucherEligibility), whitelist: 'NOT_VERIFIED',
+        estimatedGas: estimatedGas?.toString() ?? null, gasLimit: estimatedGas === null ? null : ORDER_GAS_LIMIT.toString(),
+        estimatedGasCostWei: estimatedGasCostWei?.toString() ?? null },
+      unsigned, blockers, warnings, method: input.operation === 'CANCEL' ? 'cancelOrder' : 'placePerpOrder', sendEnabled: false };
   }, () => phase);
 }
 
@@ -123,7 +185,7 @@ export async function observeReceipt(plan: ExecutionPlan, txHash: string): Promi
       const decoded = decodeFunctionData({ abi: perpPoolWriteAbi, data: tx.input });
       if (decoded.functionName === 'placeOrder') {
         call = { method: 'placeOrder', isBid: decoded.args[0], price: decoded.args[2].toString(),
-          quantity: decoded.args[3].toString() };
+          quantity: decoded.args[3].toString(), orderType: decoded.args[5] };
       } else if (decoded.functionName === 'cancelOrder') {
         call = { method: 'cancelOrder', orderId: decoded.args[0].toString() };
       }

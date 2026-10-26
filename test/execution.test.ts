@@ -64,6 +64,15 @@ test('receipt attribution and timing fail conservatively', () => {
     positionEvents: [{ account, pool, newSize: '3' }], postPositionSize: null }).verdict, 'AMBER');
 });
 
+test('M2 IOC plan rejects a different order type in transaction calldata', () => {
+  const iocPlan: ExecutionPlan = { ...plan, request: { ...plan.request, orderType: 2 } };
+  const iocReceipt: ReceiptObservation = { ...receipt,
+    call: { method: 'placeOrder', isBid: true, price: '100', quantity: '10', orderType: 2 } };
+  assert.equal(assessExecution(iocPlan, iocReceipt).verdict, 'GREEN');
+  assert.equal(assessExecution(iocPlan, { ...iocReceipt,
+    call: { ...iocReceipt.call!, orderType: 0 } }).verdict, 'RED');
+});
+
 test('execution evidence detects mutation and preserves previousHash', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'perp-canary-execution-'));
   const first = await appendExecutionRecord(dir, 'PLAN', plan);

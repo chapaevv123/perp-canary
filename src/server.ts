@@ -9,6 +9,7 @@ import { collectLive } from './live.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
+const walletJsPath = resolve('web/wallet.js');
 const executionDir = resolve('execution-evidence');
 let refreshing = false;
 const port = Number(process.env.CANARY_PORT ?? 8787);
@@ -80,6 +81,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(htmlPath));
+    } else if (request.method === 'GET' && path === '/wallet.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(walletJsPath));
     } else if (request.method === 'GET' && (path === '/api/v1/snapshots' || path === '/api/v1/latest')) {
       const history = await readSnapshots(evidenceDir);
       const value = path.endsWith('/latest') ? history.at(-1) ?? null : history;

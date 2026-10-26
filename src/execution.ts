@@ -13,8 +13,14 @@ export interface ExecutionPlan {
   symbol: string;
   baseline: { blockNumber: string; positionSize: string; feedGate: string; markPrice: string | null;
     consistency: 'SEQUENTIAL_READS_NOT_PINNED' };
-  request: { isBid: boolean | null; price: string | null; quantity: string | null; orderId: string | null };
+  request: { isBid: boolean | null; price: string | null; quantity: string | null; orderId: string | null;
+    orderType?: 2 | null };
   preview: Record<string, unknown> | null;
+  wallet?: { gasWei: string; gasSTT: string; collateralToken: string; walletCollateral: string;
+    walletCollateralHuman: string; unlockedMarginHuman: string;
+    margin: Record<string, unknown>; voucherEligibility: unknown; whitelist: 'NOT_VERIFIED';
+    estimatedGas: string | null; gasLimit: string | null; estimatedGasCostWei: string | null };
+  unsigned?: { chainId: 50383; to: string; data: string; value: string; description: string };
   blockers: string[];
   warnings: string[];
   method: 'placePerpOrder' | 'cancelOrder';
@@ -29,7 +35,7 @@ export interface ReceiptObservation {
   from: string;
   to: string | null;
   call: { method: 'placeOrder' | 'cancelOrder'; isBid?: boolean; price?: string;
-    quantity?: string; orderId?: string } | null;
+    quantity?: string; orderId?: string; orderType?: number } | null;
   blockNumber: string;
   gasUsed: string;
   effectiveGasPrice: string | null;
@@ -63,8 +69,9 @@ export function assessExecution(plan: ExecutionPlan, receipt: ReceiptObservation
       red.push('Transaction cancellation call differs from the planned order ID');
     }
   } else if (receipt.call.method !== 'placeOrder' || receipt.call.isBid !== plan.request.isBid ||
-    receipt.call.price !== plan.request.price || receipt.call.quantity !== plan.request.quantity) {
-    red.push('Transaction placement calldata differs from planned side, price or quantity');
+    receipt.call.price !== plan.request.price || receipt.call.quantity !== plan.request.quantity ||
+    (plan.request.orderType !== undefined && plan.request.orderType !== null && receipt.call.orderType !== plan.request.orderType)) {
+    red.push('Transaction placement calldata differs from planned side, price, quantity or order type');
   }
   if (receipt.from.toLowerCase() !== plan.account.toLowerCase()) amber.push('Sender differs from plan account; linked-wallet authority is not verified');
   if (BigInt(receipt.blockNumber) < BigInt(plan.baseline.blockNumber)) red.push('Receipt predates the plan baseline');

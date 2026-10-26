@@ -1,10 +1,12 @@
 # Perp Canary
 
-Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and checks whether a real transaction receipt matches a saved, read-only order plan. It uses the official `@somnia-chain/markets-sdk` for market, feed, account and risk reads. The app never signs or sends a transaction.
+Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and checks whether a real transaction receipt matches a saved order plan. It uses the official `@somnia-chain/markets-sdk` for market, feed, account and risk reads. A browser wallet can submit a testnet PLACE order only after a fresh preflight, a separate on-screen decision and a separate wallet confirmation. The local server never holds a key or sends a transaction.
 
 **M0 evidence (26 October 2026):** SDK `0.32.1`, Hideki chain ID `50383`, and RPC/WSS connectivity were checked in a complete `host-m0.ps1` run. Three `LIVE` snapshots are included. The latest records 21 markets at block `33751413`; all 21 received a feed-only `GREEN` verdict at observation time.
 
 **M1 development:** The existing local app now offers live dry-run plans for place, cancel and close operations, and can compare an existing Hideki receipt with a plan. These paths have local tests. No owner wallet, actual order, cancel, close, or receipt has been exercised through this M1 flow yet. The contest whitelist and submission eligibility remain unconfirmed.
+
+**M2 preparation:** The same UI discovers MetaMask/Rabby, checks Hideki chain ID, STT, USDso, MarginBank health, market restrictions, SDK margin/size previews and gas simulation. `buildPlacePerpOrder` produces unsigned calldata. The owner may separately authorize each testnet send in the browser wallet; none has been sent or verified here. See [wallet and execution flow](docs/m2-wallet.md).
 
 ## How it works
 
@@ -53,6 +55,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-m0.ps1
 
 `GREEN` says only that the observed pool feed reported `markPriceOk`, a nonzero mark, and an index timestamp. `AMBER` means the timestamp was unavailable; `RED` means a confirmed failed or zero mark; `UNKNOWN` means the read failed or its shape was invalid. `/api/v1/gate` remains `UNKNOWN` because execution availability and order conformance are not measured.
 
-Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. Perp Canary does not place orders or send transactions. Whitelist access and bounty eligibility remain unconfirmed.
+Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. M2 can offer an unsigned testnet PLACE order to the owner's browser wallet; no owner transaction has been executed in this development run. Whitelist access and bounty eligibility remain unconfirmed.
 
 See [architecture](docs/architecture.md) for the data flow. Perp Canary is independent of dreamDEX and Somnia. Original Perp Canary code is licensed under [MIT](LICENSE).
