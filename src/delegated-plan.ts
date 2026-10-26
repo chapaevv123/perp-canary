@@ -2,6 +2,7 @@ import { decodeFunctionData, getAddress, parseAbi, parseUnits, type Hex } from '
 import { sha256 } from './evidence.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import type { inspectTradingAuthorization } from './trading-authorization.ts';
+import type { SimulationFailure } from './preflight-failure.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
@@ -18,7 +19,8 @@ export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'P
     estimatedGasUnits: string; gasPriceWei: string; maxGasCostWei: string; marginBankUnlocked: string };
   checks: { chain: boolean; market: boolean; permission: boolean; margin: boolean;
     gas: boolean; simulation: boolean; fresh: boolean; notional: boolean; targetAndCalldata: boolean };
-  blockers: string[]; hash: string };
+  blockers: string[]; diagnostic?: { primaryError: string; blockedDependencies: string[];
+    failure: SimulationFailure; nextAction: string }; hash: string };
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 export function validatePlaceCall(data: Hex, input: { owner: string; side: 'BUY' | 'SELL'; price: string;
   quantity: string; expiresAt: string }): boolean {
@@ -63,6 +65,12 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
   };
   const blockers = [...observation.planBlockers];
   for (const [name, passed] of Object.entries(checks)) if (!passed) blockers.push(`${name} gate failed`);
+  const failure = observation.simulationFailure as SimulationFailure | null;
+  const diagnostic = failure ? {
+    primaryError: failure.contractError ?? `${failure.category}: ${failure.details}`,
+    blockedDependencies: !unsigned ? ['chain', 'gas', 'simulation', 'fresh', 'targetAndCalldata'] : ['simulation'],
+    failure, nextAction: failure.nextAction,
+  } : undefined;
   const body = { schema: 'perp-canary/delegated-plan/v2' as const,
     status: blockers.length ? 'BLOCKED' as const : 'PREPARED' as const, operation: 'PLACE' as const,
     chainId: 50383 as const, owner: getAddress(OWNER_TRADING_WALLET), operator: observation.candidateOperator,
@@ -74,6 +82,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
     expiresAt: unsigned?.expiresAt ?? new Date(now).toISOString(), markPriceRaw: observation.markPriceRaw,
     positionSizeBeforeRaw: observation.positionSizeRaw,
     transaction: unsigned ? { from: unsigned.from, to: unsigned.to, data: unsigned.data, value: '0' as const } : null,
+    ...(diagnostic ? { diagnostic } : {}),
     risk: { maxNotionalWei: MAX_NOTIONAL_WEI.toString(), orderNotionalWei: orderNotional.toString(),
       gasLimit: gasLimit.toString(), estimatedGasUnits: estimated.toString(), gasPriceWei: gasPrice.toString(),
       maxGasCostWei: gasCost.toString(), marginBankUnlocked: observation.marginBankUnlocked }, checks, blockers };

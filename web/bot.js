@@ -48,8 +48,14 @@
           ['Network', `Hideki ${plan.chainId}`], ['Owner / bot', `${plan.owner} / ${plan.operator}`],
           ['Market / side', `BTC-PERP ${plan.side}`], ['Price / quantity', `${plan.price} / ${plan.quantity}`],
           ['Gas / collateral', `${plan.risk.maxGasCostWei} wei max / ${plan.risk.marginBankUnlocked} USDso at plan`],
-          ['Checks', Object.entries(plan.checks).map(([key, ok]) => `${key}:${ok}`).join(', ')],
+          ['Checks', Object.entries(plan.checks).map(([key, ok]) =>
+            `${key}:${ok ? 'PASS' : plan.diagnostic?.blockedDependencies.includes(key) ? 'BLOCKED BY PRIMARY ERROR' : 'FAILED'}`).join(', ')],
           ['Simulation', plan.checks.simulation ? 'SUPPORTED' : 'BLOCKED'], ['Expiry', plan.expiresAt],
+          ['PRIMARY ERROR', plan.diagnostic?.primaryError || 'NONE'],
+          ['BLOCKED DEPENDENCIES', plan.diagnostic?.blockedDependencies.join(', ') || 'NONE'],
+          ['RPC / contract revert', plan.diagnostic?.failure ?
+            `${plan.diagnostic.failure.category}; RPC ${plan.diagnostic.failure.rpcCode ?? 'UNKNOWN'}; selector ${plan.diagnostic.failure.selector || 'UNKNOWN'}; ${plan.diagnostic.failure.details}; best ask ${plan.diagnostic.failure.bestAsk || 'UNKNOWN'}` : 'NONE'],
+          ['Recommended next action', plan.diagnostic?.nextAction || 'Review all failed gates and create a fresh plan'],
           ['Blockers', plan.blockers.join('; ') || 'None at plan time; local preflight repeats all checks'],
           ['Transaction', last?.txHash || 'NONE']]) {
           const p = document.createElement('p'); p.className = 'small mono'; p.textContent = `${label}: ${value}`; wrapper.append(p);
@@ -72,7 +78,8 @@
       const plan = await json('/api/v1/bot-plan', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ side: node('botSide').value, price: node('botPrice').value.trim(),
           quantity: node('botQuantity').value.trim() }) });
-      node('botPlanState').textContent = `${plan.status} · ${plan.blockers.join('; ')} · plan SHA-256 ${plan.hash}`;
+      const primary = plan.diagnostic ? `PRIMARY ERROR: ${plan.diagnostic.primaryError}\nBLOCKED DEPENDENCIES: ${plan.diagnostic.blockedDependencies.join(', ')}\nRPC / contract revert: ${plan.diagnostic.failure.category} ${plan.diagnostic.failure.selector || ''}; best ask ${plan.diagnostic.failure.bestAsk || 'UNKNOWN'}\nNEXT: ${plan.diagnostic.nextAction}` : plan.blockers.join('; ');
+      node('botPlanState').textContent = `${plan.status}\n${primary}\nPlan SHA-256: ${plan.hash}`;
       await loadExecution();
     } catch (error) { node('botPlanState').textContent = `BLOCKED · ${error.message}`; }
   };

@@ -4,6 +4,7 @@ import { createPublicClient, encodeFunctionData, formatUnits, getAddress, http, 
 import { withSnapshotSdk } from './lifecycle.ts';
 import { RPC, readRpcHead } from './rpc-health.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
+import { classifySimulationFailure, type SimulationFailure } from './preflight-failure.ts';
 
 export const HISTORICAL_SENDER = '0x71f64cd5e6e05b8401d21dc34a82c5209d1b20f0';
 export const HIDEKI_PERMISSION_REGISTRY = '0x6B2FbfeD328FF5F20C0BE7D3C3437613aFFE8D3a';
@@ -123,6 +124,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     let estimatedGasUnits: bigint | null = null;
     let observedGasPriceWei: bigint | null = null;
     let enoughMargin: boolean | null = null;
+    let simulationFailure: SimulationFailure | null = null;
     if (input.price && input.quantity && input.side && market) {
       const price = positive(input.price, market.quoteDecimals, 'price');
       const quantity = positive(input.quantity, market.baseDecimals, 'quantity');
@@ -149,7 +151,17 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
           data: encodeFunctionData({ abi: POOL_ABI, functionName: 'placeOrderFor',
             args: [owner, input.side === 'BUY', 0n, price, quantity, expiresNs, 2, 0, ZERO, 0n] }),
           expiresAt: new Date(Number(expiresNs / 1_000_000n)).toISOString() };
-        const gas = await client.estimateGas({ account: operator, to: pool, data: unsigned.data, value: 0n }).catch(() => null);
+        const gas = await client.estimateGas({ account: operator, to: pool, data: unsigned.data, value: 0n })
+          .catch(async (error: unknown) => {
+            simulationFailure = classifySimulationFailure(error);
+            if (simulationFailure.contractError === 'ImmediateOrCancelNoFill()') {
+              const book = await sdk.client.getBookTopsOnchain([{ id: pool, poolAddress: pool }],
+                { blockNumber: BigInt(head.blockNumber) }).catch(() => null);
+              const ask = book?.tops[pool.toLowerCase()]?.bestAsk;
+              if (ask) simulationFailure.bestAsk = formatUnits(BigInt(ask), market.quoteDecimals);
+            }
+            return null;
+          });
         const gasPrice = gas !== null ? await client.getGasPrice().catch(() => null) : null;
         estimatedGasUnits = gas;
         observedGasPriceWei = gasPrice;
@@ -184,6 +196,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       registry: registryRead ?? 'UNKNOWN', registryMatches: check(registryMatches, AUTH_SOURCES.perps), permissions: grants,
       revokeCapability: { status: 'SUPPORTED', value: 'Owner can revoke bot permissions in dreamDEX Bots tab; no revoke call is made', source: AUTH_SOURCES.bot },
       unsigned, simulation: check(simulation, 'eth_estimateGas read-only; estimates do not guarantee inclusion'),
+      simulationFailure,
       planBlockers, authorization: decision,
       routes: [
         { route: 'External EOA direct', status: 'NOT_RECOMMENDED', reason: 'Own signer, gas and margin required; cannot spend Wallet 1 margin' },

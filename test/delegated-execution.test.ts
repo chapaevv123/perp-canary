@@ -10,6 +10,7 @@ import { assessDelegatedTrade, readForensicEvidence, saveForensicEvidence } from
 import { appendExecutionState, readAllExecutionLedgers, readExecutionLedger, reserveIntent } from '../src/execution-ledger.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET, type ForensicsBody } from '../src/trade-forensics.ts';
 import { signedFieldsMatch } from '../src/signed-transaction.ts';
+import { classifySimulationFailure } from '../src/preflight-failure.ts';
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
@@ -78,6 +79,30 @@ test('unauthorized, revoked, wrong chain, market, margin, gas, simulation and ov
     assert.equal(buildPreparedPlan(observation(change), input).status, 'BLOCKED');
   const big = { ...input, quantity: '0.01' };
   assert.equal(buildPreparedPlan(observation({}, big), big).status, 'BLOCKED');
+});
+test('IOC no-fill revert is primary; absent unsigned transaction explains dependent failed gates', () => {
+  const failure = classifySimulationFailure({ cause: { cause: { code: 3,
+    data: '0xd48c4403', details: 'execution reverted' } } });
+  assert.equal(failure.category, 'CONTRACT_REVERT');
+  assert.equal(failure.contractError, 'ImmediateOrCancelNoFill()');
+  const p = buildPreparedPlan(observation({ unsigned: null, estimatedGasUnits: 'UNKNOWN',
+    gasPriceWei: 'UNKNOWN', simulation: { status: 'BLOCKED' },
+    simulationFailure: { ...failure, bestAsk: '80024.9' },
+    planBlockers: ['Read-only eth_estimateGas simulation failed'] }), input);
+  assert.equal(p.status, 'BLOCKED');
+  assert.equal(p.checks.market, true);
+  assert.equal(p.checks.permission, true);
+  assert.equal(p.checks.margin, true);
+  assert.equal(p.diagnostic?.primaryError, 'ImmediateOrCancelNoFill()');
+  assert.deepEqual(p.diagnostic?.blockedDependencies, ['chain', 'gas', 'simulation', 'fresh', 'targetAndCalldata']);
+  assert.equal(p.diagnostic?.failure.bestAsk, '80024.9');
+  assert.doesNotThrow(() => verifyPreparedPlan(p));
+});
+test('non-contract RPC failure is not mislabelled as IOC no-fill', () => {
+  const failure = classifySimulationFailure({ cause: { code: -32000, details: 'upstream unavailable' } });
+  assert.equal(failure.category, 'RPC_FAILURE');
+  assert.equal(failure.contractError, null);
+  assert.equal(failure.selector, null);
 });
 test('stale, expired, wrong nonce, calldata, gas and mark changes block Phase B', () => {
   const p = plan();
