@@ -17,6 +17,7 @@
     "canary-proof": "node --experimental-strip-types src/canary-proof-cli.ts",
     "canary-verify": "node --experimental-strip-types src/canary-verify-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:ui": "node --test test/ui-browser.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
@@ -28,7 +29,8 @@
     "@eslint/js": "^9.0.0",
     "@types/node": "24.19.2",
     "eslint": "^9.0.0",
-    "typescript-eslint": "^8.0.0",
-    "typescript": "5.9.3"
+    "playwright-core": "^1.64.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.0.0"
   }
 }

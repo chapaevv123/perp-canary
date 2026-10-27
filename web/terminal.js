@@ -2,10 +2,25 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const set = (id, value) => { $(id).textContent = value == null || value === '' ? '—' : String(value); };
-  const state = { market: null, proof: null, history: null, plan: null,
+  const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null,
     observations: [], started: new Date(), marketBusy: false, historyBusy: false };
   const money = value => value == null || !Number.isFinite(Number(value)) ? '—' :
     Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function decimalRaw(value, decimals) {
+    if (typeof value !== 'string' || !/^\d{1,24}(?:\.\d+)?$/.test(value)) throw Error('Enter a positive decimal number.');
+    const [whole, fraction = ''] = value.split('.');
+    if (fraction.length > decimals) throw Error(`Use at most ${decimals} decimal places.`);
+    return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0') || '0');
+  }
+  function rawDecimal(raw, decimals) {
+    const scale = 10n ** BigInt(decimals);
+    const fraction = (raw % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
+    return `${raw / scale}${fraction ? `.${fraction}` : ''}`;
+  }
+  function offsetPrice(bid, tick, bps) {
+    const target = bid * (10000n - BigInt(bps)) / 10000n;
+    return rawDecimal(target / tick * tick, 18);
+  }
   async function read(url) {
     const response = await fetch(url, { cache: 'no-store' });
     if (!(response.headers.get('content-type') || '').includes('application/json'))
@@ -23,27 +38,35 @@
     const points = state.observations;
     set('chart-count', `${points.length} observed quote${points.length === 1 ? '' : 's'}`);
     set('chart-start', `Collection started ${state.started.toLocaleTimeString()}`);
-    $('chart-empty').hidden = points.length > 0;
+    $('chart-empty').hidden = points.length >= 2;
+    if (points.length === 1) set('chart-empty', 'First trusted mark recorded. The line appears after a second distinct block.');
     if (!points.length) return;
     const prices = points.map(p => p.price);
     const low = Math.min(...prices), high = Math.max(...prices);
-    const pad = Math.max((high - low) * .25, high * .00025);
+    const pad = Math.max((high - low) * .25, high * .00025, .01);
     const span = high - low + pad * 2;
     const x = i => 50 + (points.length === 1 ? 315 : i * 630 / (points.length - 1));
     const y = price => 235 - (price - low + pad) / span * 180;
-    $('chart-line').setAttribute('d', points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.price).toFixed(1)}`).join(' '));
+    $('chart-line').setAttribute('d', points.length >= 2 ? points.map((p, i) =>
+      `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.price).toFixed(1)}`).join(' ') : '');
     const dot = $('chart-dot'), last = points.at(-1);
     dot.hidden = false; dot.setAttribute('cx', x(points.length - 1)); dot.setAttribute('cy', y(last.price));
+    set('chart-y-high', money(high + pad)); set('chart-y-low', money(low - pad));
+    set('chart-x-start', new Date(points[0].time).toLocaleTimeString());
+    set('chart-x-end', new Date(last.time).toLocaleTimeString());
+    set('chart-last', `LATEST ${money(last.price)} USDso · block ${last.block}`);
     $('chart').setAttribute('aria-label', `${points.length} real observed BTC-PERP mark quotes since ${state.started.toLocaleTimeString()}; latest ${money(last.price)} USDso`);
   }
   function updateRisk() {
     const m = state.market;
+    const bookState = !m ? 'UNKNOWN' : m.book.status !== 'TRUSTED' ? 'BLOCKED' : trustedBook() ? 'PASS' : 'STALE';
     const gates = [
-      ['Trusted book', trustedBook() ? 'PASS' : 'BLOCKED'],
+      ['Trusted book', bookState],
+      ['BTC-PERP market', m?.risk?.market ?? 'UNKNOWN'],
       ['Margin', m?.margin?.status ?? 'NOT_RUN'],
-      ['Place grant', m?.bot?.placeGrant ?? 'NOT_RUN'],
+      ['Place grant', m?.bot?.placeGrant ?? 'UNKNOWN'],
       ['Nonce', 'NOT_RUN'],
-      ['Gas', m?.risk?.gas ?? 'NOT_RUN'],
+      ['Gas balance', m?.risk?.gas ?? 'UNKNOWN'],
       ['Expiry', 'NOT_RUN'],
       ['Mark deviation', 'NOT_RUN'],
       ['Simulation', 'NOT_RUN'],
@@ -52,32 +75,75 @@
       const div = document.createElement('div'); div.className = 'gate';
       const label = document.createElement('span'); label.textContent = name;
       const value = document.createElement('strong'); value.textContent = status;
-      value.className = status === 'PASS' || status === 'SUPPORTED' || status === 'BALANCE_OBSERVED' || status === 'SUFFICIENT' ? 'ok' :
+      value.className = status === 'PASS' || status === 'SUPPORTED' || status === 'SUFFICIENT' ? 'ok' :
         status === 'BLOCKED' || status === 'INSUFFICIENT' ? 'fail' : 'pending';
       div.append(label, value); return div;
     }));
-    const ready = trustedBook() && m?.bot?.placeGrant === 'SUPPORTED';
-    $('risk-badge').className = `badge ${ready ? 'amber' : 'red'}`;
-    set('risk-badge', ready ? 'AMBER · CLI PREFLIGHT REQUIRED' : 'RED · NOT EXECUTABLE');
+    const blocked = gates.some(([, status]) => status === 'BLOCKED' || status === 'INSUFFICIENT');
+    $('risk-badge').className = `badge ${blocked ? 'red' : 'amber'}`;
+    set('risk-badge', blocked ? 'RED · BLOCKED' : bookState === 'STALE' ? 'AMBER · STALE' :
+      !m ? 'AMBER · UNKNOWN' : 'AMBER · CLI PREFLIGHT REQUIRED');
     set('risk-explanation', 'This dashboard never signs. Nonce, margin preview, gas estimate, expiry, mark deviation and simulation require a fresh exact CLI plan. NOT_RUN is not FAILED.');
     set('risk-reasons', m?.book?.reasons?.length ? m.book.reasons.join(' · ') :
-      ready ? 'Market observation is trusted; run canary-first-proof for complete preflight.' :
-        'Book or grant is unavailable. Refresh read-only data before planning.');
+      bookState === 'STALE' ? 'Market snapshot aged out. Refresh before planning.' :
+        m?.bot?.placeGrant === 'SUPPORTED' && bookState === 'PASS' ?
+          'Market observation is trusted. A specific order still requires full local CLI preflight.' :
+          'Market or grant is unavailable. Refresh read-only data before planning.');
   }
   function updatePreview() {
-    const price = Number($('limit-price').value), quantity = Number($('quantity').value);
-    set('notional', price > 0 && quantity > 0 && Number.isFinite(price * quantity) ? `${money(price * quantity)} USDso` : '—');
+    const m = state.market, priceText = $('limit-price').value.trim(), quantityText = $('quantity').value.trim();
+    state.tradeCommand = null;
+    $('copy-prepare').disabled = true;
+    $('trade-error').className = 'trade-error';
     set('gas-estimate', 'NOT_RUN'); set('margin-preview', 'NOT_RUN');
+    set('notional', '—'); set('prepare-command', 'A fresh trusted quote and valid BUY PostOnly values are required.');
+    $('quantity').removeAttribute('aria-invalid'); $('limit-price').removeAttribute('aria-invalid');
+    if (!priceText && !quantityText) { set('trade-error', 'Enter quantity and a BUY limit price.'); return; }
+    let price, quantity;
+    try { price = decimalRaw(priceText, 18); }
+    catch (error) { $('limit-price').setAttribute('aria-invalid', 'true'); set('trade-error', `Limit price: ${error.message}`); return; }
+    try { quantity = decimalRaw(quantityText, 8); }
+    catch (error) { $('quantity').setAttribute('aria-invalid', 'true'); set('trade-error', `Quantity: ${error.message}`); return; }
+    if (price <= 0n || quantity <= 0n) { set('trade-error', 'Price and quantity must be greater than zero.'); return; }
+    const notional = price * quantity / 100000000n;
+    set('notional', `${money(rawDecimal(notional, 18))} USDso`);
+    if (!trustedBook() || m?.chainId !== 50383 || m?.market !== 'BTC-PERP' || m?.risk?.market !== 'SUPPORTED') {
+      set('trade-error', 'A fresh TRUSTED BTC-PERP quote is required. Refresh the market.'); return;
+    }
+    if (m.bot.placeGrant !== 'SUPPORTED') { set('trade-error', 'Bot PLACE grant is not confirmed.'); return; }
+    try {
+      const tick = BigInt(m.grid.tickSizeRaw), lot = BigInt(m.grid.lotSizeRaw);
+      const min = BigInt(m.grid.minQuantityRaw), ask = decimalRaw(m.book.ask, 18);
+      const mark = decimalRaw(m.mark, 18);
+      if (tick <= 0n || price % tick !== 0n) throw Error('Limit price must be on the market tick grid.');
+      if (lot <= 0n || quantity < min || quantity % lot !== 0n)
+        throw Error(`Quantity must be at least ${rawDecimal(min, 8)} BTC and on the lot grid.`);
+      if (price >= ask) throw Error('BUY PostOnly would cross Best Ask. Choose a lower limit.');
+      const deviation = price > mark ? price - mark : mark - price;
+      if (mark <= 0n || deviation * 10000n > mark * 100n) throw Error('Limit is more than 1% from mark.');
+      if (notional > 100n * 10n ** 18n) throw Error('Notional exceeds the 100 USDso limit.');
+      if (notional <= 0n) throw Error('Notional must be positive.');
+    } catch (error) { set('trade-error', error.message); return; }
+    const normalizedPrice = rawDecimal(price, 18), normalizedQuantity = rawDecimal(quantity, 8);
+    state.tradeCommand = `npm.cmd run canary-prepare -- BUY ${normalizedPrice} ${normalizedQuantity}`;
+    set('prepare-command', state.tradeCommand);
+    $('trade-error').className = 'trade-error okay';
+    set('trade-error', 'Preview only. CLI will repeat all risk checks before a plan can be prepared.');
+    $('copy-prepare').disabled = false;
   }
   function updateBookFreshness() {
     if (trustedBook()) return;
+    const stale = state.market?.book?.status === 'TRUSTED';
     set('best-bid', '—'); set('best-ask', '—'); set('spread', '—');
     set('book-bid', '—'); set('book-ask', '—'); set('book-spread', '—');
-    set('book-status', 'BOOK · UNTRUSTED'); set('market-age', 'Book unavailable or stale');
-    $('book-badge').className = 'badge red'; set('book-badge', 'UNTRUSTED');
+    set('book-status', `BOOK · ${stale ? 'STALE' : state.market ? 'UNTRUSTED' : 'UNKNOWN'}`);
+    set('market-age', stale ? 'Book snapshot stale' : 'Book unavailable');
+    $('book-badge').className = `badge ${stale ? 'amber' : 'red'}`; set('book-badge', stale ? 'STALE' : 'UNTRUSTED');
+    if (stale) { set('rpc-pill', 'RPC · STALE SNAPSHOT'); $('rpc-pill').className = 'pill muted'; }
     $('depth-asks').replaceChildren(); $('depth-bids').replaceChildren();
     $('use-bid').disabled = true; $('use-ask').disabled = true;
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = true; });
+    updatePreview();
   }
   function renderMarket(m) {
     state.market = m;
@@ -107,13 +173,19 @@
     $('depth-bids').replaceChildren(...(fresh && m.depth?.status === 'VERIFIED' ?
       m.depth.bids.slice(1).map(level => depthRow('bid', level)) : []));
     if (fresh && m.depth?.status !== 'VERIFIED') set('book-reasons', `Trusted top only; deeper levels unavailable: ${m.depth?.reason || 'UNKNOWN'}`);
-    $('use-bid').disabled = !fresh; $('use-ask').disabled = !fresh;
+    $('use-bid').disabled = !fresh; $('use-ask').disabled = true;
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = !fresh; });
-    if (m.mark != null && Number.isFinite(Number(m.mark))) {
-      state.observations.push({ time: Date.now(), price: Number(m.mark), block: m.block });
+    const markTime = Date.parse(m.observedAt);
+    const credibleMark = fresh && m.chainId === 50383 && m.market === 'BTC-PERP' &&
+      m.mark != null && Number.isFinite(Number(m.mark)) && Number(m.mark) > 0 &&
+      Number.isFinite(markTime) && Date.now() >= markTime && Date.now() - markTime <= 30000;
+    if (credibleMark && state.observations.at(-1)?.block !== m.block) {
+      state.observations.push({ time: markTime, price: Number(m.mark), block: m.block });
       if (state.observations.length > 90) state.observations.shift();
       drawChart();
     }
+    set('chart-source', credibleMark ? `LIVE trusted mark observation at block ${m.block}` :
+      `Mark not charted: ${!fresh ? 'book stale or untrusted' : 'mark observation stale or unavailable'}.`);
     updateBookFreshness();
     updateRisk(); updatePreview();
   }
@@ -123,7 +195,7 @@
   }
   function renderHistory(h) {
     state.history = h;
-    set('position-size', `${h.position.sizeBtc} BTC`); set('entry-price', `${money(h.position.entryPrice)} USDso`);
+    set('position-size', h.position.sizeBtc); set('entry-price', money(h.position.entryPrice));
     set('position-block', `BLOCK ${h.position.block}`); set('open-count', h.openOrders.length);
     set('order-state', h.lifecycle.state); set('order-cause', h.lifecycle.cause);
     const body = $('orders-body'); body.replaceChildren();
@@ -142,13 +214,15 @@
     state.proof = p;
     $('proof-lead').hidden = false;
     $('proof-badge').className = 'badge green'; set('proof-badge', 'VERIFIED');
+    set('proof-events', `Verified receipt events: OrderPlaced + OrderRested at block ${p.block}. Independent chain read at proof creation.`);
+    document.querySelectorAll('[data-copy]').forEach(button => { button.disabled = false; });
     for (const [id, value] of [['tx-hash', p.txHash], ['order-id', p.orderId], ['plan-hash', p.planHash],
       ['proof-hash', p.proofHash], ['receipt-block', p.block], ['gas-used', `${p.gasUsed} units`]]) set(id, value);
   }
-  async function copy(value, label) {
+  async function copy(value, label, feedback = 'copy-feedback') {
     if (!value) return;
-    try { await window.navigator.clipboard.writeText(value); set('copy-feedback', `${label} copied`); }
-    catch { set('copy-feedback', 'Clipboard unavailable. Use the local CLI output instead.'); }
+    try { await window.navigator.clipboard.writeText(value); set(feedback, `${label}: Copied`); }
+    catch { set(feedback, 'Copy failed. Use the displayed value or local CLI output.'); }
   }
   async function loadPlan() {
     try {
@@ -157,17 +231,25 @@
       $('copy-active-plan').disabled = !active; $('copy-execute').disabled = !active; $('copy-confirmation').disabled = !active;
       set('plan-state', active ? `Active saved plan ${plan.hash}. Expires ${new Date(plan.expiresAt).toLocaleTimeString()}; CLI rechecks all gates.` :
         'No unexpired saved plan. Create a fresh one in the owner CLI. The verified first plan has expired.');
-    } catch (error) { state.plan = null; set('plan-state', `Plan lookup unavailable: ${error.message}`); }
+    } catch (error) { state.plan = null;
+      $('copy-active-plan').disabled = true; $('copy-execute').disabled = true; $('copy-confirmation').disabled = true;
+      set('plan-state', `Plan lookup unavailable: ${error.message}`); }
   }
   async function loadMarket() {
     if (state.marketBusy) return; state.marketBusy = true; $('refresh').disabled = true;
+    set('refresh', 'Refreshing live data...');
     try { renderMarket(await read('/api/v1/terminal/market')); }
     catch (error) { set('rpc-pill', 'RPC · UNKNOWN'); $('rpc-pill').className = 'pill bad';
-      state.market = null; set('book-reasons', error.message); updateRisk(); }
-    finally { state.marketBusy = false; $('refresh').disabled = false; }
+      set('bot-pill', 'BOT · UNKNOWN'); $('bot-pill').className = 'pill muted';
+      state.market = null; set('mark', '—'); set('market-block', 'UNKNOWN');
+      set('book-reasons', error.message); set('chart-source', `Source error: ${error.message}`);
+      if (!state.observations.length) set('chart-empty', `Live source unavailable: ${error.message}`);
+      updateBookFreshness(); updateRisk(); }
+    finally { state.marketBusy = false; $('refresh').disabled = false; set('refresh', 'Refresh live data'); }
   }
   async function loadHistory() {
     if (state.historyBusy) return; state.historyBusy = true;
+    set('position-block', 'REFRESHING...');
     try { renderHistory(await read('/api/v1/terminal/history')); }
     catch (error) { $('timeline').replaceChildren(timelineItem('UNKNOWN', `Read-only RPC history unavailable: ${error.message}`));
       set('order-state', 'UNKNOWN'); set('order-cause', 'UNKNOWN');
@@ -176,31 +258,34 @@
     finally { state.historyBusy = false; }
   }
   $('refresh').onclick = () => { loadMarket(); loadHistory(); loadPlan(); };
+  $('buy').onclick = () => { $('quantity').focus(); updatePreview(); };
   $('quantity').oninput = updatePreview; $('limit-price').oninput = updatePreview;
   $('use-bid').onclick = () => { if (trustedBook()) { $('limit-price').value = state.market.book.bid; updatePreview(); } };
-  $('use-ask').onclick = () => { if (trustedBook()) { $('limit-price').value = state.market.book.ask; updatePreview(); } };
   document.querySelectorAll('[data-offset]').forEach(button => { button.onclick = () => {
     if (!trustedBook()) return;
-    const bid = Number(state.market.book.bid), tick = Number(state.market.grid.tickSizeRaw) / 1e18;
-    if (!Number.isFinite(tick) || tick <= 0) return;
-    $('limit-price').value = (Math.floor((bid * (1 - Number(button.dataset.offset) / 10000)) / tick) * tick).toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+    let bid, tick;
+    try { bid = decimalRaw(state.market.book.bid, 18); tick = BigInt(state.market.grid.tickSizeRaw); }
+    catch { set('trade-error', 'Trusted price grid is unavailable. Refresh the market.'); return; }
+    if (tick <= 0n) { set('trade-error', 'Market tick size is unavailable.'); return; }
+    $('limit-price').value = offsetPrice(bid, tick, Number(button.dataset.offset));
     updatePreview();
   }; });
-  $('copy-prepare').onclick = () => copy('npm.cmd run canary-first-proof', 'Owner prepare command');
-  document.querySelectorAll('[data-copy]').forEach(button => { button.onclick = () => {
+  $('copy-prepare').onclick = () => { updatePreview(); if (state.tradeCommand) copy(state.tradeCommand, 'Owner prepare command'); };
+  document.querySelectorAll('[data-copy]').forEach(button => { button.disabled = true; button.onclick = () => {
     const p = state.proof; if (!p) return;
     const key = button.dataset.copy;
-    copy(key === 'tx' ? p.txHash : key === 'plan' ? p.planHash : p.proofHash, `${key} hash`);
+    copy(key === 'tx' ? p.txHash : key === 'plan' ? p.planHash : p.proofHash, `${key} hash`, 'proof-copy-feedback');
   }; });
   $('copy-execute').onclick = () => { if (state.plan && Date.now() < Date.parse(state.plan.expiresAt))
-    copy(`npm.cmd run bot-execute -- execute ${state.plan.hash}`, 'Execute command'); };
+    copy(`npm.cmd run bot-execute -- execute ${state.plan.hash}`, 'Execute command', 'proof-copy-feedback'); };
   $('copy-active-plan').onclick = () => { if (state.plan && Date.now() < Date.parse(state.plan.expiresAt))
-    copy(state.plan.hash, 'Active plan hash'); };
+    copy(state.plan.hash, 'Active plan hash', 'proof-copy-feedback'); };
   $('copy-confirmation').onclick = () => { if (state.plan && Date.now() < Date.parse(state.plan.expiresAt))
-    copy(`EXECUTE ${state.plan.hash}`, 'Exact confirmation'); };
+    copy(`EXECUTE ${state.plan.hash}`, 'Exact confirmation', 'proof-copy-feedback'); };
   updateRisk(); drawChart();
   read('/api/v1/terminal/proof').then(renderProof).catch(error => {
     $('proof-badge').className = 'badge red'; set('proof-badge', 'UNKNOWN');
+    set('proof-events', 'Receipt events unavailable for verification.');
     set('proof-hash', `UNKNOWN: ${error.message}`);
   });
   loadMarket(); loadHistory(); loadPlan();

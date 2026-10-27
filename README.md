@@ -20,7 +20,7 @@ npm.cmd run serve
 
 Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier research and diagnostics UI remains at `/legacy`.
 
-The chart begins when the page opens and contains only actual mark quotes collected during that session. Empty or stale reads remain visibly unknown. The right-hand trade panel is a **local visual preview**: its quantity and price fields do not prepare or submit a plan. BUY PostOnly is the verified owner path; unsupported SELL and IOC controls are disabled.
+The chart begins when the page opens and contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. The right-hand trade panel is a **local visual preview**: its quantity and price fields do not prepare or submit a plan. When the values satisfy the visible tick, lot, PostOnly, deviation and notional checks, its copy button produces the exact `npm.cmd run canary-prepare -- BUY <price> <quantity>` command. The CLI performs a fresh independent preflight and can still block it. BUY PostOnly is the verified owner path; unsupported SELL, IOC and Best Ask for a PostOnly BUY are disabled.
 
 To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**
 
@@ -47,6 +47,7 @@ The browser's risk panel uses `NOT_RUN` for checks that have not been performed 
 
 ```powershell
 npm.cmd test
+npm.cmd run test:ui
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run verify
@@ -54,3 +55,5 @@ git diff --check
 ```
 
 `verify` checks local evidence chains and proof artifacts. These commands do not sign or send a transaction.
+
+`test:ui` launches installed Chromium, Edge or Chrome against the local server. It checks controls, clipboard, chart rendering, error and stale states, `/legacy`, and responsive widths 1920, 1440, 1366, 1280 and 768 px. For an additional live Hideki browser smoke test, set the task-specific `CANARY_UI_LIVE=1` environment variable in PowerShell before running `npm.cmd run test:ui`; this needs read-only outbound RPC/SDK access. Screenshots are written to ignored `test-results/`.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import test from 'node:test';
 import { classifyLifecycle, publicProof, readFirstProof, type LifecycleEvent } from '../src/terminal-data.ts';
@@ -42,6 +42,20 @@ test('terminal HTML exposes honest read-only controls and live chart', async () 
   assert.doesNotMatch(js, /bot-plan|bot-execute.*fetch|privateKey|password/i);
 });
 
+test('all served web assets are strict UTF-8 without Cyrillic mojibake or replacement characters', async () => {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  for (const name of await readdir('web')) {
+    if (!/\.(html|js|css)$/.test(name)) continue;
+    const bytes = await readFile(`web/${name}`);
+    const body = decoder.decode(bytes);
+    assert.doesNotMatch(body, /[\u0400-\u052f\ufffd]/u, `${name} contains mojibake or replacement characters`);
+  }
+  const html = await readFile('web/index.html', 'utf8');
+  assert.match(html, /<meta charset="utf-8">/);
+  assert.match(html, /Perp Canary — BTC-PERP terminal/);
+  assert.match(html, /class="brandmark">PB<\/span>/);
+});
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve));
@@ -68,7 +82,12 @@ test('terminal HTTP serves sanitized proof and read-only home without RPC', asyn
     assert.equal(proof.orderId, '14978756187852164026332');
     assert.equal(proof.placement, 'VERIFIED');
     assert.equal((await fetch(base)).status, 200);
-    assert.match(await (await fetch(base)).text(), /BROWSER READ-ONLY/);
+    const home = await fetch(base);
+    assert.match(home.headers.get('content-type') ?? '', /text\/html; charset=utf-8/);
+    assert.match(await home.text(), /BROWSER READ-ONLY/);
+    const legacy = await fetch(`${base}/legacy`);
+    assert.match(legacy.headers.get('content-type') ?? '', /text\/html; charset=utf-8/);
+    assert.match(await legacy.text(), /Execution Integrity/);
     assert.equal((await fetch(`${base}/terminal.css`)).status, 200);
     assert.equal((await fetch(`${base}/terminal.js`)).status, 200);
     const plan = await fetch(`${base}/api/v1/terminal/plan`);

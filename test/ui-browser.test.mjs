@@ -1,0 +1,302 @@
+/* global process, fetch, setTimeout, navigator, URL, document, window */
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { join } from 'node:path';
+import test, { before, after } from 'node:test';
+import { chromium } from 'playwright-core';
+
+const chromePaths = [
+  process.env.CANARY_BROWSER_PATH,
+  join(process.env.LOCALAPPDATA || '', 'ms-playwright', 'chromium-1228', 'chrome-win64', 'chrome.exe'),
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  chromium.executablePath(),
+].filter(Boolean);
+let browser, server, base;
+
+async function freePort() {
+  const socket = createServer();
+  await new Promise((resolve, reject) => socket.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const port = socket.address().port;
+  await new Promise(resolve => socket.close(resolve));
+  return port;
+}
+
+before(async () => {
+  const executablePath = chromePaths.find(existsSync);
+  assert.ok(executablePath, 'Chromium, Edge or Chrome must be installed for browser QA');
+  const port = await freePort();
+  base = `http://127.0.0.1:${port}`;
+  server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], {
+    cwd: process.cwd(), env: { ...process.env, CANARY_PORT: String(port) }, stdio: 'ignore',
+  });
+  let ready = false;
+  for (let i = 0; i < 60; i++) {
+    try { ready = (await fetch(`${base}/api/v1/health`)).ok; if (ready) break; }
+    catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+  }
+  assert.ok(ready, 'local server must start');
+  browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
+});
+
+after(async () => { await browser?.close(); server?.kill(); });
+
+function market(block = '34470000', mark = '79800', ageMs = 0) {
+  const observedAt = new Date(Date.now() - ageMs).toISOString();
+  return { mode: 'LIVE_READ_ONLY', observedAt, block, chainId: 50383, market: 'BTC-PERP', mark,
+    book: { status: 'TRUSTED', reasons: [], bid: '79806.1', ask: '79806.3',
+      observedAt, block, source: 'SDK_ONCHAIN_PINNED_AND_DIRECT_HTTPS' },
+    depth: { status: 'VERIFIED', bids: [{ price: '79806.1', quantity: '0.01' }],
+      asks: [{ price: '79806.3', quantity: '0.02' }] },
+    bot: { placeGrant: 'SUPPORTED', cancelGrant: 'UNKNOWN', address: '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36' },
+    margin: { status: 'NOT_RUN', unlockedUsdso: '999', preview: { status: 'NOT_RUN' } },
+    risk: { market: 'SUPPORTED', gas: 'BALANCE_OBSERVED', reasons: [] },
+    grid: { tickSizeRaw: '100000000000000000', lotSizeRaw: '1000', minQuantityRaw: '10000' } };
+}
+
+const history = { mode: 'LIVE_READ_ONLY', readBlock: '34471000', scanThroughBlock: '34471001',
+  position: { sizeBtc: '0.05416', entryPrice: '80043.8', block: '34471000' },
+  lifecycle: { state: 'NOT_OPEN_AT_READ', cause: 'UNKNOWN', filledRaw: '0' },
+  openOrders: [{ id: '42', side: 'BUY', price: '79800', remaining: '0.0005' }],
+  events: [
+    { name: 'OrderPlaced', block: '34465778', txHash: '0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121', source: 'VERIFIED_PROOF', quantityRaw: '13000' },
+    { name: 'OrderRested', block: '34465778', txHash: '0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121', source: 'VERIFIED_PROOF', quantityRaw: null },
+  ] };
+
+async function fixturePage() {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  let response = market();
+  let delayMs = 0;
+  let plan = null;
+  await page.route('**/api/v1/terminal/market', async route => {
+    if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
+    await route.fulfill(response?.error ? { status: 503, json: { error: response.error } } : { json: response });
+  });
+  await page.route('**/api/v1/terminal/history', route => route.fulfill({ json: history }));
+  await page.route('**/api/v1/terminal/plan', route => route.fulfill({
+    contentType: 'application/json; charset=utf-8', body: JSON.stringify(plan),
+  }));
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.locator('#proof-badge').getByText('VERIFIED').waitFor();
+  await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor();
+  return { context, page, errors,
+    setMarket: value => { response = value; }, setDelay: value => { delayMs = value; },
+    setPlan: value => { plan = value; } };
+}
+
+test('real Chromium: controls, exact clipboard commands, chart, risk, proof and error states', async () => {
+  const { context, page, errors, setMarket, setDelay, setPlan } = await fixturePage();
+  try {
+    assert.equal(await page.locator('#buy').isEnabled(), true);
+    await page.locator('#buy').click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'quantity');
+    assert.equal(await page.locator('#sell').isDisabled(), true);
+    assert.equal(await page.locator('#order-type').isDisabled(), true);
+    assert.equal(await page.locator('#use-ask').isDisabled(), true);
+    assert.match(await page.locator('#use-ask').getAttribute('title'), /cross a BUY PostOnly/);
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    assert.equal(await page.locator('#position-size').textContent(), '0.05416');
+    assert.equal(await page.locator('#order-state').textContent(), 'NOT_OPEN_AT_READ');
+    assert.equal(await page.locator('#order-cause').textContent(), 'UNKNOWN');
+    assert.match(await page.locator('#timeline').innerText(), /OrderPlaced[\s\S]*OrderRested/);
+    assert.match(await page.locator('#proof-events').textContent(), /OrderPlaced \+ OrderRested/);
+    assert.equal(await page.locator('#chart-count').textContent(), '1 observed quote');
+    assert.match(await page.locator('#chart-empty').textContent(), /First trusted mark/);
+    assert.equal(await page.locator('#risk-badge').textContent(), 'AMBER · CLI PREFLIGHT REQUIRED');
+    assert.match(await page.locator('#gate-grid').innerText(), /NOT_RUN/);
+
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#use-bid').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79806.1');
+    assert.equal(await page.locator('#copy-prepare').isEnabled(), true);
+    assert.match(await page.locator('#prepare-command').textContent(), /BUY 79806\.1 0\.00013/);
+    assert.match(await page.locator('#notional').textContent(), /10\.37 USDso/);
+    await page.locator('[data-offset="10"]').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79726.2');
+    await page.locator('[data-offset="25"]').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79606.5');
+    await page.locator('[data-offset="50"]').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79407');
+    await page.locator('#copy-prepare').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
+      'npm.cmd run canary-prepare -- BUY 79407 0.00013');
+    assert.match(await page.locator('#copy-feedback').textContent(), /Copied/);
+    await page.locator('#quantity').fill('0.0002');
+    assert.match(await page.locator('#prepare-command').textContent(), /BUY 79407 0\.0002/);
+    await page.locator('#copy-prepare').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
+      'npm.cmd run canary-prepare -- BUY 79407 0.0002');
+    await page.locator('#quantity').fill('bad');
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    assert.match(await page.locator('#trade-error').textContent(), /Quantity: Enter a positive decimal/);
+    await page.locator('#quantity').fill('1');
+    assert.match(await page.locator('#trade-error').textContent(), /100 USDso limit/);
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#limit-price').fill('79806.15');
+    assert.match(await page.locator('#trade-error').textContent(), /tick grid/);
+    await page.locator('#limit-price').fill('79806.3');
+    assert.match(await page.locator('#trade-error').textContent(), /cross Best Ask/);
+    await page.locator('#limit-price').fill('79806.1');
+    assert.equal(await page.locator('#copy-prepare').isEnabled(), true);
+
+    await page.locator('[data-copy="tx"]').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
+      '0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121');
+    await page.locator('[data-copy="plan"]').click();
+    assert.equal((await page.evaluate(() => navigator.clipboard.readText())).length, 64);
+    await page.locator('[data-copy="proof"]').click();
+    assert.equal((await page.evaluate(() => navigator.clipboard.readText())).length, 64);
+    assert.match(await page.locator('#proof-copy-feedback').textContent(), /Copied/);
+    assert.equal(await page.locator('#copy-execute').isDisabled(), true);
+    assert.equal(await page.locator('#copy-confirmation').isDisabled(), true);
+    assert.match(await page.locator('#plan-state').textContent(), /No unexpired saved plan/);
+    setPlan({ hash: 'a'.repeat(64), side: 'BUY', price: '79806.1', quantity: '0.00013',
+      expiresAt: new Date(Date.now() + 120000).toISOString(), status: 'PREPARED_RECHECK_REQUIRED' });
+    await page.locator('#refresh').click();
+    await page.locator('#copy-execute').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => !document.getElementById('copy-execute').disabled);
+    await page.locator('#copy-active-plan').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'a'.repeat(64));
+    await page.locator('#copy-execute').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
+      `npm.cmd run bot-execute -- execute ${'a'.repeat(64)}`);
+    await page.locator('#copy-confirmation').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `EXECUTE ${'a'.repeat(64)}`);
+    setPlan(null);
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('copy-execute').disabled);
+    await page.evaluate(() => Object.defineProperty(navigator.clipboard, 'writeText', {
+      configurable: true, value: () => Promise.reject(new Error('clipboard denied')) }));
+    await page.locator('[data-copy="tx"]').click();
+    assert.match(await page.locator('#proof-copy-feedback').textContent(), /Copy failed/);
+
+    setMarket(market('34470001', '79810'));
+    await page.locator('#refresh').click();
+    await page.locator('#chart-count').getByText('2 observed quotes').waitFor();
+    assert.match(await page.locator('#chart-line').getAttribute('d'), /^M.*L/);
+    assert.equal(await page.locator('#chart-empty').isHidden(), true);
+    assert.notEqual(await page.locator('#chart-y-high').textContent(), '--');
+    assert.notEqual(await page.locator('#chart-x-end').textContent(), '--');
+    await page.locator('nav a[href="#risk"]').click();
+    assert.equal(new URL(page.url()).hash, '#risk');
+    await page.locator('nav a[href="#portfolio"]').click();
+    assert.equal(new URL(page.url()).hash, '#portfolio');
+    await page.locator('nav a[href="#proof"]').click();
+    assert.equal(new URL(page.url()).hash, '#proof');
+    await page.locator('nav a[href="#market"]').click();
+    assert.equal(new URL(page.url()).hash, '#market');
+
+    setDelay(500);
+    const refresh = page.locator('#refresh');
+    await refresh.click();
+    assert.equal(await refresh.isDisabled(), true);
+    assert.match(await refresh.textContent(), /Refreshing/);
+    await refresh.getByText('Refresh live data').waitFor();
+    setDelay(0);
+    setMarket(market('34470002', '79810', 40000));
+    await refresh.click();
+    await page.locator('#book-badge').getByText('STALE').waitFor();
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    assert.match(await page.locator('#risk-badge').textContent(), /STALE/);
+    setMarket({ error: 'RPC fixture unavailable' });
+    await refresh.click();
+    await page.locator('#rpc-pill').getByText('RPC · UNKNOWN').waitFor();
+    assert.match(await page.locator('#chart-source').textContent(), /Source error/);
+    assert.equal(await page.locator('#mark').textContent(), '—');
+    assert.ok(errors.some(error => error.includes('503')), 'expected network failure is visible in console');
+    assert.deepEqual(errors.filter(error => !error.includes('503')), []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: responsive layout has no overlap or horizontal overflow', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    mkdirSync('test-results', { recursive: true });
+    for (const width of [1920, 1440, 1366, 1280, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await page.evaluate(() => {
+        const rect = selector => document.querySelector(selector).getBoundingClientRect();
+        const [brand, nav, status] = ['.brand', '.topbar nav', '.top-status'].map(rect);
+        const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        return { width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth,
+          brandNav: intersects(brand, nav), brandStatus: intersects(brand, status), navStatus: intersects(nav, status),
+          brandVisible: brand.width > 100 && brand.height > 20 };
+      });
+      assert.equal(layout.scrollWidth <= layout.width, true, `horizontal overflow at ${width}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.brandNav || layout.brandStatus || layout.navStatus, false, `header overlap at ${width}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.brandVisible, true);
+      if (width === 1440 || width === 768)
+        await page.screenshot({ path: `test-results/ui-qa-${width}.png`, fullPage: true });
+    }
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: stale first read leaves the chart empty and preview blocked', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/api/v1/terminal/market', route => route.fulfill({ json: market('34470000', '79800', 40000) }));
+  await page.route('**/api/v1/terminal/history', route => route.fulfill({ json: history }));
+  await page.route('**/api/v1/terminal/plan', route => route.fulfill({
+    contentType: 'application/json; charset=utf-8', body: 'null',
+  }));
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.locator('#book-badge').getByText('STALE').waitFor();
+    assert.equal(await page.locator('#chart-count').textContent(), '0 observed quotes');
+    assert.equal(await page.locator('#chart-line').getAttribute('d'), '');
+    assert.equal(await page.locator('#chart-empty').isVisible(), true);
+    assert.match(await page.locator('#risk-badge').textContent(), /STALE/);
+    assert.equal(await page.locator('#use-bid').isDisabled(), true);
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: legacy page serves readable UTF-8 and navigation works', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    const response = await page.goto(`${base}/legacy`, { waitUntil: 'domcontentloaded' });
+    assert.match(response.headers()['content-type'], /text\/html; charset=utf-8/);
+    assert.match(await page.title(), /Perp Canary/);
+    assert.equal(await page.evaluate(() => document.characterSet), 'UTF-8');
+    assert.equal(await page.locator('body').count(), 1);
+    assert.equal(await page.locator('body').innerText().then(text => /[\u0400-\u04ff\ufffd]/.test(text)), false);
+    assert.equal((await page.goto(base)).status(), 200);
+    assert.equal(await page.evaluate(() => document.characterSet), 'UTF-8');
+  } finally { await context.close(); }
+});
+
+test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1' }, async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.locator('#proof-badge').getByText('VERIFIED').waitFor({ timeout: 15000 });
+    await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor({ timeout: 90000 });
+    await page.locator('#order-state').getByText('NOT_OPEN_AT_READ').waitFor({ timeout: 90000 });
+    assert.equal(await page.locator('#order-cause').textContent(), 'UNKNOWN');
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('chart-line').getAttribute('d').includes('L'),
+      undefined, { timeout: 90000 });
+    await page.waitForFunction(() => !document.getElementById('refresh').disabled &&
+      !document.getElementById('position-block').textContent.includes('REFRESHING'),
+    undefined, { timeout: 90000 });
+    assert.match(await page.locator('#chart-count').textContent(), /[2-9] observed quotes/);
+    assert.deepEqual(errors, []);
+    mkdirSync('test-results', { recursive: true });
+    await page.screenshot({ path: 'test-results/ui-qa-live.png', fullPage: true });
+  } finally { await context.close(); }
+});
