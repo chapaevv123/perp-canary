@@ -8,6 +8,7 @@
     "verify": "node --experimental-strip-types src/cli.ts verify",
     "serve": "node --experimental-strip-types src/server.ts",
     "bot": "node --experimental-strip-types src/bot-cli.ts",
+    "bot-unlock-check": "node --experimental-strip-types src/bot-cli.ts unlock",
     "bot-execute": "node --experimental-strip-types src/execute-bot-cli.ts",
     "canary-prepare": "node --experimental-strip-types src/prepare-post-only-cli.ts",
     "canary-price": "node --experimental-strip-types src/first-proof-cli.ts price",

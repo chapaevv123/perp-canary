@@ -28,9 +28,12 @@ try {
   } else if (command === 'unlock') {
     const data = await readBotKeystore();
     if (!data) throw Error('Bot keystore is NOT_CONFIGURED');
-    const password = await promptHidden('Keystore password: ');
-    console.log(JSON.stringify({ status: 'VALIDATED_AND_LOCKED', address: await unlockBotAddress(data, password),
-      chainId: 50383, signing: 'DISABLED', broadcasting: 'DISABLED' }));
+    let password = await promptHidden('Keystore password: ');
+    try {
+      const address = await unlockBotAddress(data, password);
+      console.log(JSON.stringify({ status: 'VALIDATED_AND_LOCKED', address,
+        chainId: 50383, signing: 'DISABLED', broadcasting: 'DISABLED' }));
+    } finally { password = ''; }
   } else throw Error('Usage: npm run bot -- status|address|create|unlock');
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Bot CLI failed');
