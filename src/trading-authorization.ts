@@ -6,6 +6,7 @@ import { RPC, readRpcHead } from './rpc-health.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { classifySimulationFailure, type SimulationFailure } from './preflight-failure.ts';
 import { BOOK_SOURCE, validateMarketSnapshot, type MarketBookSnapshot } from './market-integrity.ts';
+import { PLACE_PLAN_LIFETIME_MS } from './place-plan-config.ts';
 
 export const HISTORICAL_SENDER = '0x71f64cd5e6e05b8401d21dc34a82c5209d1b20f0';
 export const HIDEKI_PERMISSION_REGISTRY = '0x6B2FbfeD328FF5F20C0BE7D3C3437613aFFE8D3a';
@@ -219,7 +220,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
           planBlockers.push(`SDK maximum placeable size unavailable or exceeded${maximum?.priceable ? `: ${maximum.limitedBy}` : ''}`);
       }
       if (!planBlockers.length) {
-        const expiresNs = BigInt(Date.now() + 120_000) * 1_000_000n;
+        const expiresNs = BigInt(Date.now() + PLACE_PLAN_LIFETIME_MS) * 1_000_000n;
         unsigned = { chainId: 50383, from: operator, to: pool, value: '0',
           data: encodeFunctionData({ abi: POOL_ABI, functionName: 'placeOrderFor',
             args: [owner, input.side === 'BUY', 0n, price, quantity, expiresNs,

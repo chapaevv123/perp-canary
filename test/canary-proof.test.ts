@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, parseUnits } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, parseUnits } from 'viem';
 import { orderBookEventsAbi } from '@somnia-chain/markets-sdk';
 import { buildPreparedPlan, PLACE_ABI, verifyPreparedPlan } from '../src/delegated-plan.ts';
 import { assessExecutionPreflight, checkDelegatedPlan, executeDelegatedPlan,
@@ -18,12 +18,13 @@ import { RPC } from '../src/rpc-health.ts';
 import { appendBotPlanEvidence } from '../src/bot-evidence.ts';
 import { assertPlanNotExpired, loadExecutableBotPlan, PlanLoadError } from '../src/bot-plan-loader.ts';
 import { summarizeFirstProofStatus, type OrderDiscovery } from '../src/first-proof-status.ts';
+import { PLACE_PLAN_LIFETIME_MS, remainingPlanSeconds } from '../src/place-plan-config.ts';
 
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
 const input = { side: 'BUY' as const, price: '79990', quantity: '0.00013', executionMode: 'POST_ONLY' as const };
-function fixture(changes: Record<string, unknown> = {}) {
+function fixture(changes: Record<string, unknown> = {}, lifetimeMs = 120_000) {
   const observedAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + 120_000).toISOString();
+  const expiresAt = new Date(Date.now() + lifetimeMs).toISOString();
   const data = encodeFunctionData({ abi: PLACE_ABI, functionName: 'placeOrderFor',
     args: [OWNER_TRADING_WALLET, true, 0n, parseUnits(input.price, 18),
       parseUnits(input.quantity, 8), BigInt(Date.parse(expiresAt)) * 1_000_000n,
@@ -109,6 +110,28 @@ test('official PostOnly calldata and nonmarketable book produce a bounded plan',
   assert.equal(buildPreparedPlan(fixture({ permissions: { place: { effective: { status: 'BLOCKED' } } } }), input).status, 'BLOCKED');
   assert.equal(buildPreparedPlan(fixture({ estimatedGasUnits: '10000000' }), input).status, 'BLOCKED');
   assert.equal(buildPreparedPlan(fixture({ gasPriceWei: '50000000000' }), input).status, 'BLOCKED');
+});
+
+test('new PLACE expiry is 300 seconds and equals the uint64 nanosecond calldata expiry', () => {
+  assert.equal(PLACE_PLAN_LIFETIME_MS, 300_000);
+  const observation = fixture({}, PLACE_PLAN_LIFETIME_MS);
+  const prepared = buildPreparedPlan(observation, input);
+  assert.equal(prepared.status, 'PREPARED');
+  assert.equal(prepared.expiresAt, observation.unsigned?.expiresAt);
+  const decoded = decodeFunctionData({ abi: PLACE_ABI, data: prepared.transaction!.data });
+  assert.equal(decoded.functionName, 'placeOrderFor');
+  assert.equal(decoded.args[5], BigInt(Date.parse(prepared.expiresAt)) * 1_000_000n);
+  const span = Date.parse(prepared.expiresAt) - Date.parse(prepared.observedAt);
+  assert.ok(span >= 300_000 && span < 305_000);
+  assert.ok(remainingPlanSeconds(prepared.expiresAt) >= 299);
+  assert.doesNotThrow(() => verifyPreparedPlan(prepared));
+  const expired = assessExecutionPreflight(prepared, observation, {
+    chainId: 50383, latestNonce: 0, pendingNonce: 0, gasPrice: 6_000_000_000n,
+    gasBalance: parseUnits('5', 18), simulatedGas: 2_000_000n,
+    now: Date.parse(prepared.expiresAt) });
+  assert.ok(expired.blockers.includes('Plan expired or clock invalid'));
+  const old = plan();
+  assert.doesNotThrow(() => verifyPreparedPlan(old));
 });
 
 test('first-proof PREPARED plan persists, loads by canonical hash, and passes bot-execute read-only check', async () => {

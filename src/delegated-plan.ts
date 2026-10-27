@@ -6,6 +6,7 @@ import type { inspectTradingAuthorization } from './trading-authorization.ts';
 import type { SimulationFailure } from './preflight-failure.ts';
 import { RPC } from './rpc-health.ts';
 import { validateMarketSnapshot, type MarketBookSnapshot } from './market-integrity.ts';
+import { MAX_PLACE_PLAN_OBSERVATION_SPAN_MS } from './place-plan-config.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
@@ -155,7 +156,7 @@ export function verifyPreparedPlan(plan: PreparedPlan): void {
     (plan.status === 'PREPARED' && !riskValid) || plan.intentId !== expectedIntent ||
     (plan.status === 'PREPARED' && (plan.blockers.length > 0 || Object.values(plan.checks).some(value => !value))) ||
     (plan.status === 'PREPARED' && (Date.parse(plan.expiresAt) <= Date.parse(plan.observedAt) ||
-      Date.parse(plan.expiresAt) - Date.parse(plan.observedAt) > 240_000)) ||
+      Date.parse(plan.expiresAt) - Date.parse(plan.observedAt) > MAX_PLACE_PLAN_OBSERVATION_SPAN_MS)) ||
     plan.chainId !== 50383 || plan.operation !== 'PLACE' || !['BUY', 'SELL'].includes(plan.side) ||
     (plan.executionMode !== undefined && plan.executionMode !== 'POST_ONLY') ||
     (plan.rpcUrl !== undefined && plan.rpcUrl !== RPC) ||

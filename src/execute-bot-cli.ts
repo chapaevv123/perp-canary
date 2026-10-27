@@ -6,7 +6,7 @@ import { readBotKeystore, withUnlockedBotSigner } from './bot-keystore.ts';
 import { assertPlanNotExpired, loadExecutableBotPlan, PlanLoadError } from './bot-plan-loader.ts';
 import { positionEffect, type PreparedPlan } from './delegated-plan.ts';
 import { assessExecutionPreflight, assertExecutionMarketIntegrity, checkDelegatedPlan, ExecutionStageError,
-  executeDelegatedPlan, type ExecutionPorts, type ReadOnlyExecutionPorts } from './delegated-execution.ts';
+  executeDelegatedPlan, type ExecutionPorts, type PreflightState, type ReadOnlyExecutionPorts } from './delegated-execution.ts';
 import { decodeExecutionError } from './execution-error-decoder.ts';
 import { formatExecutionDiagnostic, saveExecutionDiagnostic } from './execution-diagnostics.ts';
 import { readExecutionLedger, appendExecutionState } from './execution-ledger.ts';
@@ -17,6 +17,8 @@ import { withSnapshotSdk } from './lifecycle.ts';
 import { RPC } from './rpc-health.ts';
 import { promptHidden, promptText } from './local-prompt.ts';
 import { verifySignedBotTransaction } from './signed-transaction.ts';
+import { confirmExecuteHash } from './execute-confirmation.ts';
+import { remainingPlanSeconds } from './place-plan-config.ts';
 import { discoverBtcOrders, inspectOrderAction,
   type OrderActionPlan } from './order-actions.ts';
 import { assessOrderActionPreflight, executeOrderActionPlan, type OrderActionPorts } from './order-action-execution.ts';
@@ -33,6 +35,9 @@ let executionEntered = false;
 const client = createPublicClient({ chain: hidekiTestnet,
   transport: http(RPC, { timeout: 15_000, retryCount: 0 }) });
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const checkMatchesSignedTerms = (check: PreflightState, transaction: TransactionSerializable): boolean =>
+  check.passed && check.nonce === transaction.nonce &&
+  BigInt(check.gasPriceWei) <= BigInt(transaction.gasPrice ?? 0n);
 async function currentPositionRaw(): Promise<string | null> {
   const controller = new AbortController();
   const sdk = new SomniaMarkets({ chain: hidekiTestnet,
@@ -53,12 +58,16 @@ async function forensicRead(txHash: Hex) {
   } catch { return null; }
 }
 async function signLocally(keystore: NonNullable<Awaited<ReturnType<typeof readBotKeystore>>>,
-  transaction: TransactionSerializable, expected: string): Promise<Hex> {
+  transaction: TransactionSerializable, expected: string,
+  beforeSign?: () => Promise<void>, expiresAt?: string): Promise<Hex> {
   let password = await promptHidden('Local bot keystore password: ');
-  try { return await withUnlockedBotSigner(keystore, password, async signer => {
-    if (!same(signer.address, expected)) throw Error('Signer address mismatch');
-    return signer.signTransaction(transaction);
-  }); }
+  try {
+    if (beforeSign) await beforeSign();
+    return await withUnlockedBotSigner(keystore, password, async signer => {
+      if (expiresAt && Date.now() >= Date.parse(expiresAt)) throw Error('Plan expired before signing');
+      if (!same(signer.address, expected)) throw Error('Signer address mismatch');
+      return signer.signTransaction(transaction);
+    }); }
   finally { password = ''; }
 }
 async function actionForensicRead(plan: OrderActionPlan, txHash: Hex) {
@@ -160,7 +169,8 @@ async function main(): Promise<void> {
   if (operation === 'check') {
     const result = await checkDelegatedPlan(plan, readOnlyPorts);
     console.log(JSON.stringify({ status: result.passed ? 'READY_FOR_OWNER_REVIEW' : 'BLOCKED',
-      planHash: plan.hash, ...result, transactionSent: 'NO' }, null, 2));
+      planHash: plan.hash, remainingSeconds: remainingPlanSeconds(plan.expiresAt),
+      ...result, transactionSent: 'NO' }, null, 2));
     return;
   }
   console.log(JSON.stringify({ planHash: plan.hash, status: plan.status, chainId: plan.chainId,
@@ -170,10 +180,11 @@ async function main(): Promise<void> {
     positionSizeBeforeRaw: plan.positionSizeBeforeRaw,
     positionEffect: positionEffect(plan.side, plan.quantity, plan.positionSizeBeforeRaw),
     gasLimit: plan.risk.gasLimit, gasBudgetWei: plan.risk.maxGasCostWei,
-    expiresAt: plan.expiresAt, blockers: plan.blockers }, null, 2));
+    expiresAt: plan.expiresAt, remainingSeconds: remainingPlanSeconds(plan.expiresAt),
+    blockers: plan.blockers }, null, 2));
   const ports: ExecutionPorts = {
     ...readOnlyPorts,
-    confirm: async p => (await promptText(`Type EXECUTE ${p.hash} to authorize this one Hideki order: `)) === `EXECUTE ${p.hash}`,
+    confirm: async p => (await confirmExecuteHash(p.hash, p.expiresAt)) === 'CONFIRMED',
     sign: async (transaction, expected) => {
         if (Date.now() >= Date.parse(plan.expiresAt) || await client.getChainId() !== 50383)
           throw Error('Plan expired or wrong chain immediately before signing');
@@ -198,9 +209,19 @@ async function main(): Promise<void> {
           gasBalance: balance, simulatedGas, now: Date.now() });
         if (!final.passed) throw new ExecutionStageError('PREFLIGHT',
           Error(`Final pre-sign check failed: ${final.blockers.join('; ')}`), permission);
-        return signLocally(keystore, transaction, expected);
+        return signLocally(keystore, transaction, expected, async () => {
+          const last = await checkDelegatedPlan(plan, readOnlyPorts);
+          if (!checkMatchesSignedTerms(last, transaction)) throw new ExecutionStageError('PREFLIGHT',
+            Error(`Pre-sign check failed: ${last.blockers.join('; ') || 'Nonce or gas price changed'}`));
+          if (Date.now() >= Date.parse(plan.expiresAt))
+            throw new ExecutionStageError('PREFLIGHT', Error('Plan expired before signing'));
+        }, plan.expiresAt);
     },
-    verifySigned: verifySignedBotTransaction,
+    verifySigned: async (raw, transaction, operator) => {
+      const final = await checkDelegatedPlan(plan, readOnlyPorts);
+      return checkMatchesSignedTerms(final, transaction) && Date.now() < Date.parse(plan.expiresAt) &&
+        verifySignedBotTransaction(raw, transaction, operator);
+    },
     broadcastOnce: raw => client.sendRawTransaction({ serializedTransaction: raw }),
     receiptAndForensics: async tx => {
       await client.waitForTransactionReceipt({ hash: tx, timeout: 45_000, pollingInterval: 1500 });
@@ -210,7 +231,8 @@ async function main(): Promise<void> {
   executionEntered = true;
   const outcome = await executeDelegatedPlan(plan, ports, { ledger: ledgerDir, forensics: forensicDir });
   console.log(JSON.stringify({ ...outcome,
-    transactionSent: outcome.state === 'UNKNOWN' ? 'UNKNOWN' : outcome.txHash ? 'YES' : 'NO' }));
+    transactionSent: outcome.state === 'UNKNOWN' ? 'UNKNOWN' :
+      outcome.state === 'BLOCKED' ? 'NO' : outcome.txHash ? 'YES' : 'NO' }));
 }
 try { await main(); }
 catch (error) {

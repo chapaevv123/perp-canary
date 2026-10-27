@@ -238,6 +238,50 @@ test('cancelled confirmation and signer failure never broadcast', async () => {
       { ledger: join(dir, 'failed'), forensics: join(dir, 'forensics') })).state, 'BLOCKED');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test('expiry during confirmation blocks before signing or broadcasting', async () => {
+  const p = plan();
+  let at = Date.now();
+  let signed = 0;
+  let sent = 0;
+  const outcome = await executeDelegatedPlan(p, ports(p, {
+    confirm: async () => { at = Date.parse(p.expiresAt); return true; },
+    sign: async () => { signed++; throw Error('must not sign'); },
+    broadcastOnce: async () => { sent++; throw Error('must not send'); },
+  }), { ledger: 'not-used-ledger', forensics: 'not-used-forensics' }, () => at);
+  assert.equal(outcome.state, 'BLOCKED');
+  assert.match(outcome.reasons.join(' '), /expired during owner confirmation/);
+  assert.equal(signed, 0);
+  assert.equal(sent, 0);
+});
+test('expiry after mock signing blocks broadcast and reports no send', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'perp-expire-before-send-'));
+  try {
+    const p = plan();
+    let at = Date.now();
+    let sent = 0;
+    const outcome = await executeDelegatedPlan(p, ports(p, {
+      verifySigned: async () => { at = Date.parse(p.expiresAt); return true; },
+      broadcastOnce: async () => { sent++; throw Error('must not send'); },
+    }), { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') }, () => at);
+    assert.equal(outcome.state, 'BLOCKED');
+    assert.match(outcome.reasons.join(' '), /expired before broadcast/);
+    assert.equal(sent, 0);
+    assert.equal((await readExecutionLedger(join(dir, 'ledger'), p.intentId)).at(-1)?.state, 'SIGNED');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('full preflight repeats after exact confirmation and blocks changed gas before signing', async () => {
+  const p = plan();
+  let gasReads = 0;
+  let signed = 0;
+  const outcome = await executeDelegatedPlan(p, ports(p, {
+    confirm: async () => true,
+    gasPrice: async () => ++gasReads === 1 ? 6_000_000_000n : 50_000_000_000n,
+    sign: async () => { signed++; throw Error('must not sign'); },
+  }), { ledger: 'not-used-ledger', forensics: 'not-used-forensics' });
+  assert.equal(outcome.state, 'BLOCKED');
+  assert.equal(gasReads, 2);
+  assert.equal(signed, 0);
+});
 test('broadcast timeout is UNKNOWN and never automatically retried', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'canary-exec-'));
   const p = plan();

@@ -153,10 +153,11 @@ export type ExecutionOutcome = { state: 'CANCELLED' | 'BLOCKED' | 'UNKNOWN' | 'V
   planHash: string; txHash: string | null; reasons: string[]; forensicHash?: string;
   marketComparison?: PreflightState['marketComparison'] };
 export async function dispatchApprovedTransaction(input: { planHash: string; intentId: string;
+  expiresAt?: string;
   operator: string; pool: string; data: Hex; gasLimit: string; gasPriceWei: string; nonce: number },
   ports: Pick<ExecutionPorts, 'sign' | 'verifySigned' | 'broadcastOnce'>,
   ledger: string, finish: (txHash: Hex) => Promise<{ verdict: 'VERIFIED' | 'AMBER' | 'RED';
-    reasons: string[]; hash: string } | null>): Promise<ExecutionOutcome> {
+    reasons: string[]; hash: string } | null>, now = Date.now): Promise<ExecutionOutcome> {
   const base = { planHash: input.planHash, txHash: null as string | null };
   await reserveIntent(ledger, input.intentId, input.planHash);
   const transaction: TransactionSerializable = { type: 'legacy', chainId: 50383,
@@ -174,10 +175,14 @@ export async function dispatchApprovedTransaction(input: { planHash: string; int
   catch { /* Verification failure is pre-broadcast and terminal. */ }
   if (!signedMatches) {
     await appendExecutionState(ledger, input.intentId, input.planHash, 'BLOCKED_PRE_BROADCAST', null);
-    return { ...base, state: 'BLOCKED', reasons: ['Signed transaction differs from approved plan; no broadcast'] };
+    return { ...base, state: 'BLOCKED',
+      reasons: ['Signed transaction verification or final preflight failed; no broadcast'] };
   }
   const signedHash = keccak256(raw);
   await appendExecutionState(ledger, input.intentId, input.planHash, 'SIGNED', signedHash);
+  if (input.expiresAt && now() >= Date.parse(input.expiresAt))
+    return { ...base, state: 'BLOCKED', txHash: signedHash,
+      reasons: ['Plan expired before broadcast; signed transaction was not sent'] };
   let submitted: Hex;
   try { submitted = await ports.broadcastOnce(raw); }
   catch {
@@ -199,20 +204,24 @@ export async function dispatchApprovedTransaction(input: { planHash: string; int
     reasons: result.reasons, forensicHash: result.hash };
 }
 export async function executeDelegatedPlan(plan: PreparedPlan, ports: ExecutionPorts,
-  dirs: { ledger: string; forensics: string }): Promise<ExecutionOutcome> {
+  dirs: { ledger: string; forensics: string }, now = Date.now): Promise<ExecutionOutcome> {
   verifyPreparedPlan(plan);
   const base = { planHash: plan.hash, txHash: null as string | null };
   if (plan.status !== 'PREPARED') return { ...base, state: 'BLOCKED', reasons: plan.blockers };
-  if (Date.now() >= Date.parse(plan.expiresAt)) return { ...base, state: 'BLOCKED', reasons: ['Plan expired'] };
+  if (now() >= Date.parse(plan.expiresAt)) return { ...base, state: 'BLOCKED', reasons: ['Plan expired'] };
   const first = await gatherPreflight(plan, ports);
   if (!first.passed) return { ...base, state: 'BLOCKED', reasons: first.blockers,
     marketComparison: first.marketComparison };
-  if (!await ports.confirm(plan)) return { ...base, state: 'CANCELLED', reasons: ['Owner did not confirm exact plan hash'] };
+  const confirmed = await ports.confirm(plan);
+  if (now() >= Date.parse(plan.expiresAt))
+    return { ...base, state: 'BLOCKED', reasons: ['Plan expired during owner confirmation'] };
+  if (!confirmed) return { ...base, state: 'CANCELLED', reasons: ['Owner did not confirm exact plan hash'] };
   const second = await gatherPreflight(plan, ports);
   if (!second.passed || second.nonce !== first.nonce) return { ...base, state: 'BLOCKED',
     reasons: [...second.blockers, ...(second.nonce !== first.nonce ? ['Nonce changed before signing'] : [])],
     marketComparison: second.marketComparison };
   return dispatchApprovedTransaction({ planHash: plan.hash, intentId: plan.intentId,
+    expiresAt: plan.expiresAt,
     operator: plan.operator, pool: plan.pool, data: plan.transaction!.data,
     gasLimit: plan.risk.gasLimit, gasPriceWei: second.gasPriceWei, nonce: second.nonce },
   ports, dirs.ledger, async txHash => {
@@ -221,7 +230,7 @@ export async function executeDelegatedPlan(plan: PreparedPlan, ports: ExecutionP
     const forensic = assessDelegatedTrade(plan, evidence.body, evidence.currentPositionRaw);
     await saveForensicEvidence(dirs.forensics, forensic);
     return { verdict: forensic.verdict, reasons: forensic.reasons, hash: forensic.hash };
-  });
+  }, now);
 }
 export type ReadOnlyExecutionPorts = Pick<ExecutionPorts, 'fresh' | 'chainId' | 'nonce' |
   'gasPrice' | 'gasBalance' | 'estimateOriginal'>;

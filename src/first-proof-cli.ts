@@ -10,6 +10,7 @@ import { buildPreparedPlan } from './delegated-plan.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
 import { loadExecutableBotPlan } from './bot-plan-loader.ts';
 import { summarizePreflightBlockers } from './preflight-blocker-diagnostics.ts';
+import { remainingPlanSeconds } from './place-plan-config.ts';
 
 const runFile = promisify(execFile);
 const mode = process.argv[2];
@@ -82,7 +83,8 @@ try {
         if (checked.status === 'READY_FOR_OWNER_REVIEW' && checked.passed === true &&
           checked.planHash === loaded.hash && Date.now() < Date.parse(loaded.expiresAt)) {
           console.log(JSON.stringify({ status: 'READY_FOR_OWNER_REVIEW', planHash: loaded.hash,
-            expiresAt: plan.expiresAt, side: plan.side, price: plan.price,
+            expiresAt: plan.expiresAt, remainingSeconds: remainingPlanSeconds(plan.expiresAt),
+            side: plan.side, price: plan.price,
             quantity: plan.quantity, expectedPositionEffect: 'BUY can increase existing LONG if filled',
             orderNotionalWei: plan.risk.orderNotionalWei,
             estimatedGasUnits: plan.risk.estimatedGasUnits, gasLimit: plan.risk.gasLimit,
