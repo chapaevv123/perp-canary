@@ -119,3 +119,28 @@ button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-
   .proof-list button{grid-column:1}.head-actions .button{padding-inline:10px}
 }
 @media(prefers-reduced-motion:reduce){button:not(:disabled),a,.brandmark{transition:none}}
+
+/* M5 direct-wallet flow, inside the existing trading column. */
+.wallet-button{white-space:nowrap;background:#34305a;border-color:#6258d8}
+.market-picker{display:flex;align-items:center;gap:12px;margin:7px 0 5px;color:#9eabc0;font-size:14px}
+.market-picker select{min-width:210px;padding:6px 10px;border:1px solid #49546d;border-radius:6px;background:#202838;color:#edf0f7;font-size:19px;font-weight:700}
+.market-picker select:focus-visible{outline:2px solid #9b93ff;outline-offset:2px}
+.side-switch button.selected.sell{background:#603040;color:#ff9aaf;border-color:#ac526f}
+.wallet-workflow{margin:16px 0;border-top:1px solid #424c60;padding-top:17px}
+.wallet-summary{display:grid;gap:6px;padding:12px;background:#1c2431;border:1px solid #3e4b60;border-radius:6px;font-size:13px}
+.wallet-summary strong{font-size:14px;overflow-wrap:anywhere}.wallet-summary span{color:#aab7c9;overflow-wrap:anywhere}
+.guard-card{margin:12px 0;padding:14px;border:1px solid #665a8d;border-left:3px solid #a897f4;border-radius:6px;background:#242839}
+.guard-card>span{display:block;color:#b7aafd;font-size:12px;font-weight:800;letter-spacing:.08em}
+.guard-card strong{display:block;margin:6px 0;font-size:18px;color:#ffd189}
+#guard-verdict[data-verdict="GREEN"]{color:#5fe4af}#guard-verdict[data-verdict="RED"]{color:#ff829c}
+.guard-card p{margin:0;color:#c0cbda;font-size:13px;line-height:1.5}
+.review-card{margin:14px 0;padding:15px;border:1px solid #7062aa;border-radius:7px;background:#1e2332}
+.review-card h3{font-size:17px;margin:0 0 10px}.review-card p{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.review-actions{display:flex;gap:8px;flex-wrap:wrap}.review-actions button{flex:1 1 150px}
+.wallet-result{min-height:22px;color:#afbbcb;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.wallet-result[data-kind="error"]{color:#ff9eac}.wallet-result[data-kind="warn"]{color:#ffd397}.wallet-result[data-kind="ok"]{color:#70e4b6}
+.wallet-position{padding:13px 0;border-top:1px solid #3e485b;font-size:13px}
+.wallet-position>strong{font-size:14px}.wallet-position p{color:#b1bed0;overflow-wrap:anywhere}
+.wallet-order-row{padding:8px 0;border-top:1px solid #384354;overflow-wrap:anywhere}
+@media(max-width:1450px){.top-status{flex-wrap:wrap;justify-content:flex-end}}
+@media(max-width:550px){.top-status{justify-content:flex-start}.page-head>div{width:100%;min-width:0}.market-picker{align-items:flex-start;flex-direction:column;gap:4px;min-width:0}.market-picker select{width:100%;min-width:0;max-width:100%;font-size:18px}}

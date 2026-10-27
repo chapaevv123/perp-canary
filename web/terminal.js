@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const set = (id, value) => { $(id).textContent = value == null || value === '' ? '—' : String(value); };
-  const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null,
+  const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null, side: 'BUY',
     observations: [], started: new Date(), marketBusy: false, historyBusy: false };
   const money = value => value == null || !Number.isFinite(Number(value)) ? '—' :
     Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -118,18 +118,19 @@
       if (tick <= 0n || price % tick !== 0n) throw Error('Limit price must be on the market tick grid.');
       if (lot <= 0n || quantity < min || quantity % lot !== 0n)
         throw Error(`Quantity must be at least ${rawDecimal(min, 8)} BTC and on the lot grid.`);
-      if (price >= ask) throw Error('BUY PostOnly would cross Best Ask. Choose a lower limit.');
+      if (state.side === 'BUY' ? price >= ask : price <= decimalRaw(m.book.bid, 18))
+        throw Error(`${state.side} PostOnly would cross the opposite book top.`);
       const deviation = price > mark ? price - mark : mark - price;
       if (mark <= 0n || deviation * 10000n > mark * 100n) throw Error('Limit is more than 1% from mark.');
       if (notional > 100n * 10n ** 18n) throw Error('Notional exceeds the 100 USDso limit.');
       if (notional <= 0n) throw Error('Notional must be positive.');
     } catch (error) { set('trade-error', error.message); return; }
     const normalizedPrice = rawDecimal(price, 18), normalizedQuantity = rawDecimal(quantity, 8);
-    state.tradeCommand = `npm.cmd run canary-prepare -- BUY ${normalizedPrice} ${normalizedQuantity}`;
-    set('prepare-command', state.tradeCommand);
+    state.tradeCommand = state.side === 'BUY' ? `npm.cmd run canary-prepare -- BUY ${normalizedPrice} ${normalizedQuantity}` : null;
+    set('prepare-command', state.tradeCommand ?? 'Owner CLI currently supports BUY only. Use the connected wallet review for SELL.');
     $('trade-error').className = 'trade-error okay';
     set('trade-error', 'Preview only. CLI will repeat all risk checks before a plan can be prepared.');
-    $('copy-prepare').disabled = false;
+    $('copy-prepare').disabled = !state.tradeCommand;
   }
   function updateBookFreshness() {
     if (trustedBook()) return;
@@ -173,7 +174,7 @@
     $('depth-bids').replaceChildren(...(fresh && m.depth?.status === 'VERIFIED' ?
       m.depth.bids.slice(1).map(level => depthRow('bid', level)) : []));
     if (fresh && m.depth?.status !== 'VERIFIED') set('book-reasons', `Trusted top only; deeper levels unavailable: ${m.depth?.reason || 'UNKNOWN'}`);
-    $('use-bid').disabled = !fresh; $('use-ask').disabled = true;
+    $('use-bid').disabled = !fresh || state.side !== 'BUY'; $('use-ask').disabled = !fresh || state.side !== 'SELL';
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = !fresh; });
     const markTime = Date.parse(m.observedAt);
     const credibleMark = fresh && m.chainId === 50383 && m.market === 'BTC-PERP' &&
@@ -188,6 +189,7 @@
       `Mark not charted: ${!fresh ? 'book stale or untrusted' : 'mark observation stale or unavailable'}.`);
     updateBookFreshness();
     updateRisk(); updatePreview();
+    window.dispatchEvent(new window.CustomEvent('canary:market', { detail: m }));
   }
   function timelineItem(name, detail) {
     const li = document.createElement('li'), strong = document.createElement('strong'), span = document.createElement('span');
@@ -247,7 +249,8 @@
       state.market = null; set('mark', '—'); set('market-block', 'UNKNOWN');
       set('book-reasons', error.message); set('chart-source', `Source error: ${error.message}`);
       if (!state.observations.length) set('chart-empty', `Live source unavailable: ${error.message}`);
-      updateBookFreshness(); updateRisk(); }
+      updateBookFreshness(); updateRisk();
+      window.dispatchEvent(new window.CustomEvent('canary:market', { detail: null })); }
     finally { state.marketBusy = false; $('refresh').disabled = false; set('refresh', 'Refresh live data'); }
   }
   async function loadHistory() {
@@ -261,16 +264,35 @@
     finally { state.historyBusy = false; }
   }
   $('refresh').onclick = () => { loadMarket(); loadHistory(); loadPlan(); };
-  $('buy').onclick = () => { $('quantity').focus(); updatePreview(); };
+  function selectSide(side) {
+    state.side = side;
+    $('buy').classList.toggle('selected', side === 'BUY'); $('sell').classList.toggle('selected', side === 'SELL');
+    $('buy').setAttribute('aria-pressed', String(side === 'BUY'));
+    $('sell').setAttribute('aria-pressed', String(side === 'SELL'));
+    $('use-bid').disabled = !trustedBook() || side !== 'BUY';
+    $('use-ask').disabled = !trustedBook() || side !== 'SELL';
+    document.querySelector('.offset-label').textContent = `${side} OFFSET FROM BEST ${side === 'BUY' ? 'BID' : 'ASK'}`;
+    document.querySelectorAll('[data-offset]').forEach(button => {
+      button.textContent = `${side === 'BUY' ? '−' : '+'}${button.dataset.offset} bps`;
+    });
+    updatePreview(); window.dispatchEvent(new window.CustomEvent('canary:side', { detail: side }));
+  }
+  $('buy').onclick = () => { selectSide('BUY'); $('quantity').focus(); };
+  $('sell').disabled = false;
+  $('sell').onclick = () => { selectSide('SELL'); $('quantity').focus(); };
   $('quantity').oninput = updatePreview; $('limit-price').oninput = updatePreview;
   $('use-bid').onclick = () => { if (trustedBook()) { $('limit-price').value = state.market.book.bid; updatePreview(); } };
+  $('use-ask').onclick = () => { if (trustedBook() && state.side === 'SELL') {
+    $('limit-price').value = state.market.book.ask; updatePreview(); } };
   document.querySelectorAll('[data-offset]').forEach(button => { button.onclick = () => {
     if (!trustedBook()) return;
-    let bid, tick;
-    try { bid = decimalRaw(state.market.book.bid, 18); tick = BigInt(state.market.grid.tickSizeRaw); }
+    let top, tick;
+    try { top = decimalRaw(state.side === 'BUY' ? state.market.book.bid : state.market.book.ask, 18);
+      tick = BigInt(state.market.grid.tickSizeRaw); }
     catch { set('trade-error', 'Trusted price grid is unavailable. Refresh the market.'); return; }
     if (tick <= 0n) { set('trade-error', 'Market tick size is unavailable.'); return; }
-    $('limit-price').value = offsetPrice(bid, tick, Number(button.dataset.offset));
+    $('limit-price').value = state.side === 'BUY' ? offsetPrice(top, tick, Number(button.dataset.offset)) :
+      rawDecimal(((top * (10000n + BigInt(button.dataset.offset)) + 9999n) / 10000n + tick - 1n) / tick * tick, 18);
     updatePreview();
   }; });
   $('copy-prepare').onclick = () => { updatePreview(); if (state.tradeCommand) copy(state.tradeCommand, 'Owner prepare command'); };

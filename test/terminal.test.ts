@@ -29,12 +29,12 @@ test('order disappearance stays UNKNOWN without a matching terminal event', () =
   assert.equal(classifyLifecycle(base, null).state, 'UNKNOWN');
 });
 
-test('terminal HTML exposes honest read-only controls and live chart', async () => {
+test('terminal HTML exposes wallet-confirmed controls and real-observation chart', async () => {
   const html = await readFile('web/index.html', 'utf8');
   const js = await readFile('web/terminal.js', 'utf8');
   for (const id of ['chart', 'book-bid', 'book-ask', 'gate-grid', 'timeline', 'proof-hash',
     'copy-active-plan', 'copy-execute', 'copy-confirmation', 'use-bid', 'use-ask']) assert.match(html, new RegExp(`id="${id}"`));
-  assert.match(html, /BROWSER READ-ONLY/);
+  assert.match(html, /WALLET APPROVAL REQUIRED/);
   assert.match(html, /SELL \/ SHORT<\/button>/);
   assert.match(html, /No historical candles are invented/);
   assert.match(js, /state\.observations\.push\(/);
@@ -85,7 +85,7 @@ test('terminal HTTP serves sanitized proof and read-only home without RPC', asyn
     assert.equal((await fetch(base)).status, 200);
     const home = await fetch(base);
     assert.match(home.headers.get('content-type') ?? '', /text\/html; charset=utf-8/);
-    assert.match(await home.text(), /BROWSER READ-ONLY/);
+    assert.match(await home.text(), /WALLET APPROVAL REQUIRED/);
     const legacy = await fetch(`${base}/legacy`);
     assert.match(legacy.headers.get('content-type') ?? '', /text\/html; charset=utf-8/);
     assert.match(await legacy.text(), /Execution Integrity/);

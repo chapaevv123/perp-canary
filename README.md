@@ -1,6 +1,6 @@
 # Perp Canary
 
-Perp Canary is a local BTC-PERP terminal and owner-confirmed execution workflow for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first real on-chain order. The browser is read-only: it does not sign, send, cancel, or close orders.
+Perp Canary is a BTC-PERP trading terminal and Canary Trade Guard foundation for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first owner bot order. M5 adds a direct injected-wallet PostOnly order review and wallet-confirmed send path. **No M5 user-wallet trade has been executed or verified on-chain.** The existing owner bot workflow and encrypted keystore remain separate.
 
 ## Verified first order
 
@@ -22,7 +22,7 @@ Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier resea
 
 The terminal keeps its graphite/purple trading layout across desktop and mobile. Its original Canary SVG is served locally as both the header mark and favicon; no external font or image request is required.
 
-The chart begins when the page opens and contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. The right-hand trade panel is a **local visual preview**: its quantity and price fields do not prepare or submit a plan. When the values satisfy the visible tick, lot, PostOnly, deviation and notional checks, its copy button produces the exact `npm.cmd run canary-prepare -- BUY <price> <quantity>` command. The CLI performs a fresh independent preflight and can still block it. BUY PostOnly is the verified owner path; unsupported SELL, IOC and Best Ask for a PostOnly BUY are disabled.
+The chart contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. Connect an injected EIP-1193 wallet on Hideki to read that EOA's actual gas, USDso, margin, position and open orders. Enter a BUY or SELL PostOnly limit, then click **Review wallet order**. Canary Trade Guard checks a fresh trusted market, tick/lot, size, mark deviation, margin, gas and contract simulation. The review shows the exact pool and EOA. Only **Confirm in wallet** asks the wallet to send; the server never signs for users. SELL can add a short and is not reduce-only. Market/IOC, margin deposits, cancellation and closing are not enabled yet. A separate button still copies the owner CLI prepare command for BUY.
 
 To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**
 
@@ -34,11 +34,12 @@ To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a loca
 - Local SHA-256 proof bundle, verified receipt, and evidence timeline. The historical research UI and CLI remain available.
 - Owner CLI PostOnly workflow with 300-second plan expiry, maximum 100 USDso notional, maximum 0.1 STT gas, maximum 1% mark deviation, TRUSTED market snapshot, margin, grants, nonce, simulation, idempotency, and immediate final preflight.
 
-The browser's risk panel uses `NOT_RUN` for checks that have not been performed for a specific plan. A displayed quote never means an order is approved. SELL, IOC, automatic cancellation, and delegated position close are not claimed as verified features.
+The historical owner-bot risk panel uses `NOT_RUN` for checks that have not been performed for a specific owner plan. The new Canary Trade Guard is specific to a connected EOA and uses GREEN/AMBER/RED/UNKNOWN. A displayed quote never means an order is approved. See the [M5 capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md) for verified methods, implementation status, and remaining blockers to a public trading product.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [M5 trading capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md)
 - [Security model](docs/security-model.md)
 - [Verified on-chain evidence](docs/verified-onchain-evidence.md)
 - [Demo walkthrough](docs/demo-walkthrough.md)

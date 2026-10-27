@@ -25,12 +25,14 @@ import { readOrderActionForensics } from './order-action-forensics.ts';
 import { assessCanary, assessPlanCanary, type CanarySignal } from './canary-safety.ts';
 import { localRequestRejection } from './server-security.ts';
 import { publicProof, readFirstOrderHistory, readFirstProof, readTerminalMarket } from './terminal-data.ts';
+import { prepareDirectTrade, readDirectAccount, readDirectReceipt, type DirectInput } from './browser-trade.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
 const legacyHtmlPath = resolve('web/legacy.html');
 const terminalCssPath = resolve('web/terminal.css');
 const terminalJsPath = resolve('web/terminal.js');
+const tradingJsPath = resolve('web/trading.js');
 const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
@@ -86,12 +88,26 @@ createServer(async (request, response) => {
         Date.parse(plan.expiresAt) > Date.now()).at(-1);
       json(response, 200, active ? { hash: active.hash, side: active.side, price: active.price,
         quantity: active.quantity, expiresAt: active.expiresAt, status: 'PREPARED_RECHECK_REQUIRED' } : null);
+    } else if (request.method === 'GET' && path === '/api/v1/trade/account') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readDirectAccount(params.get('account') ?? ''));
+    } else if (request.method === 'POST' && path === '/api/v1/trade/prepare') {
+      const body = await jsonBody(request);
+      if (body.orderType !== 'POST_ONLY' || !['BUY', 'SELL'].includes(String(body.side)))
+        throw Error('Only BTC-PERP BUY/SELL PostOnly is supported');
+      json(response, 200, await prepareDirectTrade(body as DirectInput));
+    } else if (request.method === 'GET' && path === '/api/v1/trade/receipt') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readDirectReceipt(params.get('hash') ?? '', params.get('account') ?? ''));
     } else if (request.method === 'GET' && path === '/terminal.css') {
       response.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(terminalCssPath));
     } else if (request.method === 'GET' && path === '/terminal.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(terminalJsPath));
+    } else if (request.method === 'GET' && path === '/trading.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(tradingJsPath));
     } else if (request.method === 'GET' && path === '/canary-mark.svg') {
       response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       response.end(await readFile(canaryMarkPath));

@@ -65,9 +65,10 @@ const history = { mode: 'LIVE_READ_ONLY', readBlock: '34471000', scanThroughBloc
     { name: 'OrderRested', block: '34465778', txHash: '0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121', source: 'VERIFIED_PROOF', quantityRaw: null },
   ] };
 
-async function fixturePage() {
+async function fixturePage(initScript) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await context.newPage();
+  if (initScript) await page.addInitScript(initScript);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -96,10 +97,10 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#buy').isEnabled(), true);
     await page.locator('#buy').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'quantity');
-    assert.equal(await page.locator('#sell').isDisabled(), true);
+    assert.equal(await page.locator('#sell').isEnabled(), true);
     assert.equal(await page.locator('#order-type').isDisabled(), true);
     assert.equal(await page.locator('#use-ask').isDisabled(), true);
-    assert.match(await page.locator('#use-ask').getAttribute('title'), /cross a BUY PostOnly/);
+    assert.match(await page.locator('#use-ask').getAttribute('title'), /would cross the book/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     assert.equal(await page.locator('#position-size').textContent(), '0.05416');
     assert.equal(await page.locator('#order-state').textContent(), 'NOT_OPEN_AT_READ');
@@ -142,9 +143,18 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     await page.locator('#limit-price').fill('79806.15');
     assert.match(await page.locator('#trade-error').textContent(), /tick grid/);
     await page.locator('#limit-price').fill('79806.3');
-    assert.match(await page.locator('#trade-error').textContent(), /cross Best Ask/);
+    assert.match(await page.locator('#trade-error').textContent(), /cross the opposite book top/);
     await page.locator('#limit-price').fill('79806.1');
     assert.equal(await page.locator('#copy-prepare').isEnabled(), true);
+    await page.locator('#sell').click();
+    assert.equal(await page.locator('#use-ask').isEnabled(), true);
+    await page.locator('#use-ask').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79806.3');
+    await page.locator('[data-offset="10"]').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '79886.2');
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    await page.locator('#buy').click();
+    await page.locator('#use-bid').click();
 
     await page.locator('[data-copy="tx"]').click();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
@@ -213,6 +223,101 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#mark').textContent(), '—');
     assert.ok(errors.some(error => error.includes('503')), 'expected network failure is visible in console');
     assert.deepEqual(errors.filter(error => !error.includes('503')), []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: wallet review, rejection, guarded submission and mocked receipt', async () => {
+  const account = '0x1111111111111111111111111111111111111111';
+  const txHash = `0x${'a'.repeat(64)}`;
+  const { context, page, errors } = await fixturePage(() => {
+    const wallet = '0x1111111111111111111111111111111111111111';
+    const hash = `0x${'a'.repeat(64)}`;
+    const listeners = {};
+    window.__walletMock = { chain: '0xc4cf', account: wallet, sends: 0, reject: false,
+      changeAccount(value) { this.account = value; listeners.accountsChanged?.([value]); },
+      changeChain(value) { this.chain = value; listeners.chainChanged?.(value); } };
+    window.ethereum = {
+      on(name, callback) { listeners[name] = callback; },
+      removeListener(name) { delete listeners[name]; },
+      async request({ method }) {
+        if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [window.__walletMock.account];
+        if (method === 'eth_chainId') return window.__walletMock.chain;
+        if (method === 'wallet_switchEthereumChain') { window.__walletMock.changeChain('0xc4cf'); return null; }
+        if (method === 'eth_sendTransaction') {
+          window.__walletMock.sends++;
+          if (window.__walletMock.reject) throw Error('User rejected request');
+          return hash;
+        }
+        throw Error(`Unexpected wallet method ${method}`);
+      },
+    };
+  });
+  let prepareStatus = 'READY', receiptState = 'PENDING', prepareCalls = 0;
+  const tx = { chainId: 50383, from: account, to: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0',
+    data: '0x4e978373', value: '0x0', gas: '0x5208', expiresAt: new Date(Date.now() + 280000).toISOString(),
+    maxGasCostStt: '0.001' };
+  try {
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: { account, gasStt: '1',
+      walletUsdso: '100', marginUnlocked: '50', position: { sizeBtc: '0', entryPrice: '0' },
+      openOrders: [], block: '123' } }));
+    await page.route('**/api/v1/trade/prepare', route => {
+      prepareCalls++;
+      route.fulfill({ json: { status: prepareStatus, guard: { verdict: prepareStatus === 'READY' ? 'GREEN' : 'RED',
+        blockers: prepareStatus === 'READY' ? [] : ['Contract simulation failed.'], warnings: [],
+        notionalRaw: '10374793000000000000' }, transaction: prepareStatus === 'READY' ? tx : null } });
+    });
+    await page.route('**/api/v1/trade/receipt?**', route => route.fulfill({ json: {
+      state: receiptState, hash: txHash, block: '456', orderId: '789' } }));
+    assert.equal(await page.locator('#review-order').isDisabled(), true);
+    await page.locator('#wallet-connect').click();
+    await page.locator('#wallet-state').getByText(/Hideki 50383/).waitFor();
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#use-bid').click();
+    prepareStatus = 'BLOCKED';
+    await page.locator('#review-order').click();
+    await page.locator('#guard-verdict').getByText('RED').waitFor();
+    assert.equal(await page.locator('#trade-review').isHidden(), true);
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 0);
+    prepareStatus = 'READY';
+    await page.locator('#review-order').click();
+    await page.locator('#trade-review').waitFor();
+    mkdirSync('test-results', { recursive: true });
+    await page.screenshot({ path: 'test-results/m5-wallet-review-mocked.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await page.screenshot({ path: 'test-results/m5-wallet-review-mobile-mocked.png', fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 0);
+    await page.evaluate(() => { window.__walletMock.reject = true; });
+    await page.locator('#confirm-wallet').click();
+    await page.locator('#wallet-result').getByText(/User rejected request/).waitFor();
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 1);
+    await page.locator('#review-order').click();
+    await page.evaluate(() => { window.__walletMock.reject = false; });
+    receiptState = 'PLACED';
+    await page.locator('#confirm-wallet').click();
+    await page.locator('#wallet-result').getByText(/On-chain placement confirmed/).waitFor();
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
+    assert.ok(prepareCalls >= 4);
+    await page.evaluate(() => window.__walletMock.changeChain('0x1'));
+    assert.equal(await page.locator('#review-order').isDisabled(), true);
+    await page.locator('#wallet-switch').click();
+    await page.locator('#wallet-state').getByText(/Hideki 50383/).waitFor();
+    await page.evaluate(() => window.__walletMock.changeAccount('0x2222222222222222222222222222222222222222'));
+    await page.locator('#wallet-state').getByText(/0x2222/).waitFor();
+    await page.locator('#wallet-disconnect').click();
+    assert.equal(await page.locator('#review-order').isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: missing injected wallet cannot review or submit', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    await page.locator('#wallet-connect').click();
+    assert.match(await page.locator('#wallet-result').textContent(), /No injected EIP-1193 wallet/);
+    assert.equal(await page.locator('#review-order').isDisabled(), true);
+    assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
 
