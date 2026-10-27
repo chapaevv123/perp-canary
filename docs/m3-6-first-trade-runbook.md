@@ -1,0 +1,45 @@
+# M3.6 first-trade runbook and execution failure audit
+
+**Scope:** read-only diagnostics and owner-controlled preparation. This milestone made no live trade, signature, transfer, key export or Git push. The existing Wallet 1 LONG remains untouched. Evolution Score stays **26**.
+
+## What happened to plan `0c522886…73b21e5`
+
+The saved `bot-evidence` record verifies as a `PREPARED` BTC-PERP BUY for `0.00013` BTC at `79764` USDso, Wallet 1 `0xE350…b20f`, bot `0xA8ad…fBE36`, Hideki `50383`, pool `0x4181…b94c`, block `34338107`, and expiry `2026-10-27T07:28:43.876Z`. Its calldata selector is the documented `placeOrderFor` `0x80054449`, order type `2` (IOC), zero value; original estimated gas was `2,335,838`, cap `3,019,797`. There is no local execution ledger or tx hash for this intent. The owner reported that the CLI printed viem's `execution reverted` **before password entry**, with no revert data retained. No claim of broadcast or fill is justified.
+
+The code path identifies the **failing stage**: `executeDelegatedPlan → gatherPreflight → ports.estimateOriginal → viem estimateGas` for the saved calldata. The earlier browser preflight estimated a **new** order calldata with a fresh expiry; the CLI's original-calldata estimate was a separate call, after a fresh SDK/RPC read. In M3.5, a rejected `Promise.all` escaped to the top-level catch as a large viem dump. It never reached owner confirmation, signer or broadcast, and no intent was reserved. The RPC URL in the browser server and CLI source is the same official Hideki HTTPS endpoint. Both estimate with bot `from`, BTC pool `to`, zero value and IOC `placeOrderFor`; the original plan did not persist its RPC URL or book top, so an old running browser process and exact market at the CLI failure cannot be independently attested.
+
+Read-only historical replay with `scripts/m36-forensic.ts` at sampled block `34338107` (timestamp `2026-10-27T07:26:35Z`) returned successful `eth_call` for the saved calldata, same bot/from, pool/to, zero value and plan gas cap. Pinned on-chain best bid/ask were `79750.3 / 79751.6`, so the `79764` BUY crossed the sampled ask. This validates the sampled state, **not** the unknown later CLI block or its gas estimation. At `2026-10-27T07:38:03Z`, new read-only checks observed chain `50383`, nonce latest/pending `0/0`, 5 STT, 1000 unlocked USDso, effective per-pool place/cancel/reduce grants, the unchanged `+0.05416` BTC LONG, bid/ask `79735.3 / 79742.1`, and a successful *new* `79764`/`0.00013` IOC estimate of `2,647,362` gas. That new plan was ephemeral, never saved and is now expired. The old revert selector and exact failure block are **UNKNOWN**. Do not label it IOC_NO_FILL or PlanExpired without their selector or contemporaneous timestamp evidence.
+
+## Pipeline and diagnostics
+
+| Stage | Read/write | Context and gate |
+| --- | --- | --- |
+| Dashboard PREPARED | Read-only | SDK market/position/margin/permissions, official RPC `eth_estimateGas` of new IOC calldata from bot; saves an expiring hash chain record. |
+| CLI `loadPlan` | Local read | Verifies evidence chain, plan hash, BTC pool, owner, bot, calldata and risk limits. |
+| First CLI preflight | Read-only | Fresh SDK reads, `getChainId`, latest/pending bot nonce, gas price/balance, `estimateGas` of **saved** calldata with same bot/from, pool/to, zero value. New SDK calldata is checked for semantic parameters; its expiry differs by design. |
+| Exact hash confirmation | Local input | Only after all read-only checks pass. |
+| Second preflight | Read-only | Repeats the same gates and requires unchanged nonce. |
+| Final pre-sign check | Read-only | Rechecks chain, nonce, gas, permissions, position and original-calldata estimate; errors here are now stage-labelled. |
+| Sign, verify, send once | Write | Only after password entry. A durable intent is reserved before signing. Signed fields are verified. RPC raw send has retry count zero. |
+| Receipt/forensics | Read-only | Receipt, events and position delta decide VERIFIED/AMBER/RED; uncertain send/receipt remains UNKNOWN, with no automatic retry. |
+
+The shared `src/execution-error-decoder.ts` uses only errors exported by installed `@somnia-chain/markets-sdk@0.32.1` `contractErrorsAbi`: `ImmediateOrCancelNoFill`, `InsufficientMargin*`, `OnlyApprovedContracts`, `InvalidOrderOwner/Pair`, `InvalidQuantity`, `QuantityBelowMinimum`, `InvalidPrice`, `PriceOutOfBounds`, `OrderAlreadyExpired`. Local wrong-chain, nonce and expiry failures have **no invented contract selector**. Unknown or absent revert data stays `UNKNOWN_REVERT`. Browser preflight and CLI use this decoder; it also accepts nested viem errors for `simulateContract`, `eth_call` and receipt replay. Official [contract errors](https://app.testnet.dreamdex.io/docs/developers/contracts/errors) and [place-order rejection selectors](https://app.testnet.dreamdex.io/docs/developers/contracts/functions) corroborate the installed ABI.
+
+The CLI prints stage, reason, class, confirmed selector or `UNKNOWN`, plan/current ask when known, limit, quantity, whether a transaction may have been sent, safe action, and a local diagnostic path/hash. It does not print full calldata or raw viem objects. The ignored local `bot-execution-diagnostics` file stores no password, key, keystore content or raw calldata; it stores a calldata SHA-256, plan hash, addresses, chain, RPC, plan/current bid/ask and mark, margin/gas facts and a canonical SHA-256. `npm.cmd run verify` checks local diagnostic hashes. A handled signing failure becomes terminal `BLOCKED_PRE_BROADCAST` with no tx hash. A broadcast exception remains `BROADCAST_UNKNOWN` with the signed hash reserved and must be reconciled; there is no automatic resend.
+
+## Owner-controlled first trade
+
+1. Restart the localhost dashboard so it serves this commit; refresh Bot Connection and BTC-PERP market/position data. Check Hideki `50383`, bot and Wallet 1 public addresses, grants, gas, margin and best bid/ask.
+2. Choose the current minimum legal BTC size and a BUY limit on the live tick grid. A BUY adds to the existing LONG; it does not create an independent position. Choose the price manually within your slippage tolerance. Perp Canary never changes it automatically.
+3. Create a fresh dashboard `PREPARED` plan. Review the exact hash, expiry, side, quantity, price, pool, owner, bot, position effect, plan bid/ask and mark, order notional, unlocked margin, gas estimate and maximum STT cost. A `BLOCKED` plan is unusable.
+4. In a local terminal, run **read-only** `npm.cmd run bot-execute -- check <exact-plan-hash>`. It reloads and verifies the plan, then repeats available live chain, grant, market, position, margin, nonce, gas, saved-calldata estimate and price-movement checks. It never unlocks, signs, reserves an intent or broadcasts. `READY_FOR_OWNER_REVIEW` from `check` is a diagnostic result, not consent.
+5. If `check` is blocked or the plan expires, inspect the short report and diagnostic file; create a new plan after resolving the cause. For `UNKNOWN_REVERT`, retain the file and do not guess the contract reason or bypass `estimateGas`.
+6. Only after a separate owner decision, while the same plan is unexpired, run `npm.cmd run bot-execute -- execute <exact-plan-hash>`. Review the printed owner, bot, chain, pool, side, quantity, price, notional, gas budget, expiry and expected position effect.
+7. Enter `EXECUTE <same-hash>` only if the fresh checks and parameters still meet your intent. Enter the keystore password **only in the local terminal prompt** after that confirmation; never send it through the dashboard or chat.
+8. A transaction has only been submitted if the CLI reports a signed/returned tx hash or its ledger shows `SIGNED`/`BROADCAST_ACCEPTED`/`BROADCAST_UNKNOWN`. A preflight error with `Transaction sent: NO` has no tx hash and no fill.
+9. On a returned hash, inspect the Hideki transaction and receipt. `status 0x1` alone is insufficient; inspect exact input, owner, pool and decoded events.
+10. Verify `OrderPlaced`, matching taker `OrderFilled` quantity/price, the last Wallet 1/BTC pool `PositionUpdated`, and an independent current position read. A full `0.00013` BTC BUY from `+0.05416` would imply `+0.05429` BTC, provided no other intervening trade changed it.
+11. Retrieve the SHA-256 forensic artifact from Execution Control and run `npm.cmd run verify`. Claim `VERIFIED` only if full fill, receipt and position reconciliation all pass. Partial/no fill or missing evidence must retain AMBER/RED/UNKNOWN as appropriate.
+12. For `BLOCKED`, do not use the expired or rejected plan. For `UNKNOWN` after possible broadcast, **never execute again**; inspect the reserved signed tx hash and use `npm.cmd run bot-execute -- reconcile <plan-hash> <tx-hash>` only after checking chain state. `CLOSE_POSITION` remains blocked; if the owner needs to close the existing position, use dreamDEX UI separately.
+
+This runbook does not authorize any trade. The next live action remains an independent owner decision after a fresh plan and read-only `check`.

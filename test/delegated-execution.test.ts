@@ -6,12 +6,15 @@ import { tmpdir } from 'node:os';
 import { encodeFunctionData, keccak256, parseUnits, type Hex } from 'viem';
 import { buildPreparedPlan, PLACE_ABI, positionEffect, verifyPreparedPlan } from '../src/delegated-plan.ts';
 import { appendBotPlanEvidence, readBotPlanEvidence } from '../src/bot-evidence.ts';
-import { assessExecutionPreflight, executeDelegatedPlan, type ExecutionPorts } from '../src/delegated-execution.ts';
+import { assessExecutionPreflight, checkDelegatedPlan, ExecutionStageError,
+  executeDelegatedPlan, type ExecutionPorts } from '../src/delegated-execution.ts';
+import { decodeExecutionError } from '../src/execution-error-decoder.ts';
 import { assessDelegatedTrade, readForensicEvidence, saveForensicEvidence } from '../src/delegated-forensics.ts';
 import { appendExecutionState, readAllExecutionLedgers, readExecutionLedger, reserveIntent } from '../src/execution-ledger.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET, type ForensicsBody } from '../src/trade-forensics.ts';
 import { signedFieldsMatch } from '../src/signed-transaction.ts';
 import { classifySimulationFailure } from '../src/preflight-failure.ts';
+import { RPC } from '../src/rpc-health.ts';
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
@@ -110,7 +113,9 @@ test('stale, expired, wrong nonce, calldata, gas and mark changes block Phase B'
   const p = plan();
   const base = { chainId: 50383, latestNonce: 4, pendingNonce: 4, gasPrice: 6_000_000_000n,
     gasBalance: parseUnits('5', 18), simulatedGas: 2_000_000n, now: Date.now() };
-  assert.equal(assessExecutionPreflight(p, observation(), base).passed, true);
+  const freshBase = observation();
+  const baseline = assessExecutionPreflight(p, freshBase, { ...base, now: Date.now() });
+  assert.equal(baseline.passed, true, baseline.blockers.join('; '));
   for (const change of [{ chainId: 5031 }, { pendingNonce: 5 }, { gasBalance: 0n },
     { simulatedGas: 20_000_000n }, { now: Date.parse(p.expiresAt) + 1 }])
     assert.equal(assessExecutionPreflight(p, observation(), { ...base, ...change }).passed, false);
@@ -281,6 +286,62 @@ test('receipt RPC timeout leaves UNKNOWN and the intent reserved', async () => {
     }), { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') });
     assert.equal(result.state, 'UNKNOWN');
     assert.equal((await readExecutionLedger(join(dir, 'ledger'), p.intentId)).at(-1)?.state, 'BROADCAST_ACCEPTED');
+    await assert.rejects(reserveIntent(join(dir, 'ledger'), p.intentId, p.hash), /EEXIST/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('browser PREPARED and CLI original-calldata IOC revert stays pre-broadcast', async () => {
+  const p = plan();
+  assert.equal(p.status, 'PREPARED');
+  const failure = { cause: { code: 3, data: '0xd48c4403', message: 'execution reverted' } };
+  await assert.rejects(checkDelegatedPlan(p, ports(p, {
+    estimateOriginal: async () => { throw failure; },
+    sign: async () => { throw Error('sign must not run'); },
+    broadcastOnce: async () => { throw Error('send must not run'); },
+  })), error => {
+    assert.ok(error instanceof ExecutionStageError);
+    assert.equal(error.stage, 'ESTIMATE_GAS');
+    const decoded = decodeExecutionError(error.original, error.stage);
+    assert.equal(decoded.reason, 'IOC_NO_FILL');
+    assert.equal(decoded.contractError, 'ImmediateOrCancelNoFill()');
+    assert.equal(decoded.transactionSent, 'NO');
+    return true;
+  });
+});
+
+test('read-only preflight detects sender, RPC chain, calldata and changed ask', () => {
+  const p = plan();
+  const base = { chainId: 50383, latestNonce: 0, pendingNonce: 0,
+    gasPrice: 6_000_000_000n, gasBalance: parseUnits('5', 18),
+    simulatedGas: 2_000_000n, now: Date.now() };
+  const sender = observation({ unsigned: { ...observation().unsigned, from: OWNER_TRADING_WALLET } });
+  assert.match(assessExecutionPreflight(p, sender, base).blockers.join(' '), /calldata mismatch/);
+  assert.match(assessExecutionPreflight(p, observation(), { ...base, chainId: 50312 }).blockers.join(' '), /Wrong chain/);
+  const pinned = buildPreparedPlan(observation({ rpcUrl: RPC }), input);
+  const changedRpc = observation({ rpcUrl: 'https://different.invalid' });
+  assert.match(assessExecutionPreflight(pinned, changedRpc, base).blockers.join(' '), /RPC endpoint changed/);
+  const data = observation().unsigned!.data.replace(/.$/, '1') as Hex;
+  const calldata = observation({ unsigned: { ...observation().unsigned, data } });
+  assert.match(assessExecutionPreflight(p, calldata, base).blockers.join(' '), /calldata mismatch/);
+  const book = observation({ bookTops: { blockNumber: '1',
+    bestBidRaw: parseUnits('79999', 18).toString(),
+    bestAskRaw: parseUnits('80001', 18).toString() } });
+  assert.match(assessExecutionPreflight(p, book, base).blockers.join(' '), /below current best ask/);
+});
+
+test('signing failure records terminal pre-broadcast state without a fake tx hash', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'canary-m36-presend-'));
+  const p = plan();
+  try {
+    const result = await executeDelegatedPlan(p, ports(p, {
+      sign: async () => { throw Error('fixture signer failure'); },
+      broadcastOnce: async () => { throw Error('must not broadcast'); },
+    }), { ledger: join(dir, 'ledger'), forensics: join(dir, 'forensics') });
+    assert.equal(result.state, 'BLOCKED');
+    assert.equal(result.txHash, null);
+    const history = await readExecutionLedger(join(dir, 'ledger'), p.intentId);
+    assert.equal(history.at(-1)?.state, 'BLOCKED_PRE_BROADCAST');
+    assert.equal(history.at(-1)?.txHash, null);
     await assert.rejects(reserveIntent(join(dir, 'ledger'), p.intentId, p.hash), /EEXIST/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

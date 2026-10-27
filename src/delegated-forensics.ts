@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { canonical, sha256 } from './evidence.ts';
 import type { ForensicsBody, TradeEvent } from './trade-forensics.ts';
 import type { PreparedPlan } from './delegated-plan.ts';
+import { decodeExecutionError } from './execution-error-decoder.ts';
 import { parseUnits } from 'viem';
 
 export type ExecutionVerdict = 'VERIFIED' | 'AMBER' | 'RED';
@@ -29,7 +30,10 @@ export function assessDelegatedTrade(plan: PreparedPlan, body: ForensicsBody,
     red.push('Sender, target or calldata differs from plan');
   if (receipt && (!same(receipt.from, plan.operator) || !same(receipt.to, plan.pool)))
     red.push('Receipt sender or target mismatch');
-  if (receipt && receipt.status !== '0x1') red.push('Transaction reverted');
+  if (receipt && receipt.status !== '0x1') {
+    const failure = decodeExecutionError({ message: 'execution reverted' }, 'RECEIPT', 'YES');
+    red.push(`Transaction reverted: ${failure.reason} (receipt has no revert selector)`);
+  }
   if (body.marketIdentity.status !== 'VERIFIED') amber.push('LIVE market identity unavailable');
   const placed = body.decodedEvents.find(e => e.eventName === 'OrderPlaced' && same(e.address, plan.pool) &&
     same((args(e).placedOrder as Record<string, unknown> | undefined)?.owner, plan.owner));

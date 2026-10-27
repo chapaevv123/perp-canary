@@ -5,7 +5,10 @@ import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { readBotKeystore, withUnlockedBotSigner } from './bot-keystore.ts';
 import { readBotPlanEvidence } from './bot-evidence.ts';
 import { positionEffect, verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
-import { assessExecutionPreflight, executeDelegatedPlan, type ExecutionPorts } from './delegated-execution.ts';
+import { assessExecutionPreflight, checkDelegatedPlan, ExecutionStageError,
+  executeDelegatedPlan, type ExecutionPorts, type ReadOnlyExecutionPorts } from './delegated-execution.ts';
+import { decodeExecutionError } from './execution-error-decoder.ts';
+import { formatExecutionDiagnostic, saveExecutionDiagnostic } from './execution-diagnostics.ts';
 import { readExecutionLedger, appendExecutionState } from './execution-ledger.ts';
 import { assessDelegatedTrade, saveForensicEvidence } from './delegated-forensics.ts';
 import { collectTradeForensics, BTC_POOL, HIDEKI_MARGIN_BANK, OWNER_TRADING_WALLET } from './trade-forensics.ts';
@@ -23,6 +26,10 @@ const botPlanDir = resolve('bot-evidence');
 const ledgerDir = resolve('bot-execution-ledger');
 const forensicDir = resolve('bot-execution-forensics');
 const orderForensicDir = resolve('bot-order-action-forensics');
+const diagnosticDir = resolve('bot-execution-diagnostics');
+let activePlan: PreparedPlan | null = null;
+let activeOperation: string | null = null;
+let executionEntered = false;
 const client = createPublicClient({ chain: hidekiTestnet,
   transport: http(RPC, { timeout: 15_000, retryCount: 0 }) });
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -111,10 +118,12 @@ async function runOrderAction(plan: OrderActionPlan,
 }
 async function main(): Promise<void> {
   const [operation, hash, txHash] = process.argv.slice(2);
-  if (!['execute', 'reconcile'].includes(operation ?? '') || !hash ||
-    (operation === 'execute' && txHash) || (operation === 'reconcile' && !txHash))
-    throw Error('Usage: npm run bot-execute -- execute <plan-hash> | reconcile <plan-hash> <tx-hash>');
+  activeOperation = operation ?? null;
+  if (!['execute', 'reconcile', 'check'].includes(operation ?? '') || !hash ||
+    (operation !== 'reconcile' && txHash) || (operation === 'reconcile' && !txHash))
+    throw Error('Usage: npm run bot-execute -- check|execute <plan-hash> | reconcile <plan-hash> <tx-hash>');
   const plan = await loadPlan(hash);
+  if (plan.schema === 'perp-canary/delegated-plan/v2') activePlan = plan;
   const keystore = await readBotKeystore();
   if (!keystore || !same(keystore.address, plan.operator)) throw Error('Local bot address differs from saved plan');
   if (operation === 'reconcile') {
@@ -141,7 +150,26 @@ async function main(): Promise<void> {
     }
     return;
   }
-  if (plan.schema === 'perp-canary/order-action-plan/v1') { await runOrderAction(plan, keystore); return; }
+  if (plan.schema === 'perp-canary/order-action-plan/v1') {
+    if (operation === 'check') throw Error('Read-only check currently supports PLACE plans only');
+    await runOrderAction(plan, keystore); return;
+  }
+  const readOnlyPorts: ReadOnlyExecutionPorts = {
+    fresh: () => inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
+      operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price, quantity: plan.quantity }),
+    chainId: () => client.getChainId(),
+    nonce: tag => client.getTransactionCount({ address: keystore.address as Address, blockTag: tag }),
+    gasPrice: () => client.getGasPrice(),
+    gasBalance: () => client.getBalance({ address: keystore.address as Address }),
+    estimateOriginal: p => client.estimateGas({ account: keystore.address as Address,
+      to: p.transaction!.to as Address, data: p.transaction!.data, value: 0n }),
+  };
+  if (operation === 'check') {
+    const result = await checkDelegatedPlan(plan, readOnlyPorts);
+    console.log(JSON.stringify({ status: result.passed ? 'READY_FOR_OWNER_REVIEW' : 'BLOCKED',
+      planHash: plan.hash, ...result, transactionSent: 'NO' }, null, 2));
+    return;
+  }
   console.log(JSON.stringify({ planHash: plan.hash, status: plan.status, chainId: plan.chainId,
     owner: plan.owner, operator: plan.operator, pool: plan.pool, side: plan.side,
     price: plan.price, quantity: plan.quantity, notionalWei: plan.risk.orderNotionalWei,
@@ -150,14 +178,7 @@ async function main(): Promise<void> {
     gasLimit: plan.risk.gasLimit, gasBudgetWei: plan.risk.maxGasCostWei,
     expiresAt: plan.expiresAt, blockers: plan.blockers }, null, 2));
   const ports: ExecutionPorts = {
-    fresh: () => inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
-      operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price, quantity: plan.quantity }),
-    chainId: () => client.getChainId(),
-    nonce: tag => client.getTransactionCount({ address: keystore.address as Address, blockTag: tag }),
-    gasPrice: () => client.getGasPrice(),
-    gasBalance: () => client.getBalance({ address: keystore.address as Address }),
-    estimateOriginal: p => client.estimateGas({ account: keystore.address as Address,
-      to: BTC_POOL as Address, data: p.transaction!.data, value: 0n }),
+    ...readOnlyPorts,
     confirm: async p => (await promptText(`Type EXECUTE ${p.hash} to authorize this one Hideki order: `)) === `EXECUTE ${p.hash}`,
     sign: async (transaction, expected) => {
         if (Date.now() >= Date.parse(plan.expiresAt) || await client.getChainId() !== 50383)
@@ -172,8 +193,10 @@ async function main(): Promise<void> {
           throw Error('Nonce, gas price, or balance changed before signing');
         const permission = await inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
           operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price, quantity: plan.quantity });
-        const simulatedGas = await client.estimateGas({ account: keystore.address as Address,
-          to: BTC_POOL as Address, data: plan.transaction!.data, value: 0n });
+        let simulatedGas: bigint;
+        try { simulatedGas = await client.estimateGas({ account: keystore.address as Address,
+          to: plan.transaction!.to as Address, data: plan.transaction!.data, value: 0n }); }
+        catch (error) { throw new ExecutionStageError('ESTIMATE_GAS', error, permission); }
         const final = assessExecutionPreflight(plan, permission, { chainId: await client.getChainId(),
           latestNonce: latest, pendingNonce: pending, gasPrice: freshGasPrice,
           gasBalance: balance, simulatedGas, now: Date.now() });
@@ -187,11 +210,23 @@ async function main(): Promise<void> {
       return forensicRead(tx);
     },
   };
+  executionEntered = true;
   const outcome = await executeDelegatedPlan(plan, ports, { ledger: ledgerDir, forensics: forensicDir });
   console.log(JSON.stringify(outcome));
 }
 try { await main(); }
 catch (error) {
-  console.error(error instanceof Error ? error.message : 'Local execution failed; inspect ledger before retrying');
+  const stage = error instanceof ExecutionStageError ? error.stage :
+    activeOperation === 'execute' && executionEntered ? 'BROADCAST' : 'PLAN_LOAD';
+  const original = error instanceof ExecutionStageError ? error.original : error;
+  const decoded = decodeExecutionError(original, stage,
+    stage === 'BROADCAST' ? 'UNKNOWN' : 'NO');
+  if (activePlan) {
+    try {
+      const diagnostic = await saveExecutionDiagnostic(diagnosticDir, activePlan,
+        error instanceof ExecutionStageError ? error.observation : undefined, decoded, RPC);
+      console.error(formatExecutionDiagnostic(diagnostic));
+    } catch { console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}\nAction: ${decoded.safeNextAction}`); }
+  } else console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}`);
   process.exitCode = 1;
 }

@@ -92,6 +92,8 @@
             `${plan.positionSizeBeforeRaw} raw before; ${plan.side === 'BUY' ? '+' : '-'}${rawBtc(plan.quantity)} raw if full fill; BUY adds to an existing LONG`],
           ['Order', action ? `ID ${plan.orderId}, remaining ${plan.before?.remainingRaw || 'UNKNOWN'} raw, next ${plan.newRemainingRaw || 'CANCEL'}` : `${plan.price} / ${plan.quantity}`],
           ['Gas / collateral', `${plan.risk.maxGasCostWei} wei max / ${action ? 'position unaffected by resting order maintenance' : `${plan.risk.marginBankUnlocked} USDso at plan`}`],
+          ['Best bid / ask at plan', action ? 'UNKNOWN' :
+            `${plan.bookTops?.bestBidRaw || 'UNKNOWN'} / ${plan.bookTops?.bestAskRaw || 'UNKNOWN'} raw`],
           ['Checks', Object.entries(plan.checks).map(([key, ok]) =>
             `${key}:${ok ? 'PASS' : plan.diagnostic?.blockedDependencies.includes(key) ? 'BLOCKED BY PRIMARY ERROR' : 'FAILED'}`).join(', ')],
           ['Simulation', plan.checks.simulation ? 'SUPPORTED' : 'BLOCKED'], ['Expiry', plan.expiresAt],
@@ -123,7 +125,7 @@
         body: JSON.stringify({ side: node('botSide').value, price: node('botPrice').value.trim(),
           quantity: node('botQuantity').value.trim() }) });
       const primary = plan.diagnostic ? `PRIMARY ERROR: ${plan.diagnostic.primaryError}\nBLOCKED DEPENDENCIES: ${plan.diagnostic.blockedDependencies.join(', ')}\nRPC / contract revert: ${plan.diagnostic.failure.category} ${plan.diagnostic.failure.selector || ''}; best ask ${plan.diagnostic.failure.bestAsk || 'UNKNOWN'}\nNEXT: ${plan.diagnostic.nextAction}` : plan.blockers.join('; ');
-      node('botPlanState').textContent = `${plan.status}\nPosition effect: ${plan.positionEffect?.kind || 'UNKNOWN'}; before ${plan.positionSizeBeforeRaw} raw, after full fill ${plan.positionEffect?.afterFullFillRaw || 'UNKNOWN'} raw\nExpires: ${plan.expiresAt}\nGas cap: ${plan.risk.maxGasCostWei} wei; margin: ${plan.risk.marginBankUnlocked} USDso; target: ${plan.transaction?.to || 'NONE'}\nCanary ${plan.canary.verdict}: ${plan.canary.primary || 'NONE'}\n${primary}\nPlan SHA-256: ${plan.hash}`;
+      node('botPlanState').textContent = `${plan.status}\nPosition effect: ${plan.positionEffect?.kind || 'UNKNOWN'}; before ${plan.positionSizeBeforeRaw} raw, after full fill ${plan.positionEffect?.afterFullFillRaw || 'UNKNOWN'} raw\nBest bid/ask: ${plan.bookTops?.bestBidRaw || 'UNKNOWN'} / ${plan.bookTops?.bestAskRaw || 'UNKNOWN'} raw\nExpires: ${plan.expiresAt}\nGas cap: ${plan.risk.maxGasCostWei} wei; margin: ${plan.risk.marginBankUnlocked} USDso; target: ${plan.transaction?.to || 'NONE'}\nCanary ${plan.canary.verdict}: ${plan.canary.primary || 'NONE'}\n${primary}\nPlan SHA-256: ${plan.hash}`;
       await loadExecution();
     } catch (error) { node('botPlanState').textContent = `BLOCKED · ${error.message}`; }
   };

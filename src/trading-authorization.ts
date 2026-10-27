@@ -94,6 +94,9 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     const marketStatus = system ? (await sdk.client.listPerpPoolStatuses({ factory: system.perpPoolFactory }).catch(() => []))
       .find(row => row.pool.toLowerCase() === pool.toLowerCase()) : null;
     const feed = market ? await sdk.client.getPerpFeedStatus(pool).catch(() => null) : null;
+    const book = market ? await sdk.client.getBookTopsOnchain([{ id: pool, poolAddress: pool }],
+      { blockNumber: BigInt(head.blockNumber) }).catch(() => null) : null;
+    const top = book?.tops[pool.toLowerCase()];
     const marketSupported = !market ? false : !system || !marketStatus || !feed ? null :
       marketStatus.registered === true && marketStatus.tradeable === true && feed.markPriceOk === true &&
       system.fullyWired === true && market.quoteToken.toLowerCase() === system.collateralToken.toLowerCase();
@@ -154,12 +157,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
         const gas = await client.estimateGas({ account: operator, to: pool, data: unsigned.data, value: 0n })
           .catch(async (error: unknown) => {
             simulationFailure = classifySimulationFailure(error);
-            if (simulationFailure.contractError === 'ImmediateOrCancelNoFill()') {
-              const book = await sdk.client.getBookTopsOnchain([{ id: pool, poolAddress: pool }],
-                { blockNumber: BigInt(head.blockNumber) }).catch(() => null);
-              const ask = book?.tops[pool.toLowerCase()]?.bestAsk;
-              if (ask) simulationFailure.bestAsk = formatUnits(BigInt(ask), market.quoteDecimals);
-            }
+            if (simulationFailure.contractError === 'ImmediateOrCancelNoFill()' && top?.bestAsk)
+              simulationFailure.bestAsk = formatUnits(BigInt(top.bestAsk), market.quoteDecimals);
             return null;
           });
         const gasPrice = gas !== null ? await client.getGasPrice().catch(() => null) : null;
@@ -179,6 +178,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       signerControlled: false, asOf: Date.parse(sampledAt), now: Date.now(), simulation,
       walletMatches: owner.toLowerCase() === (input.tradingWallet ? address(input.tradingWallet, 'Trading wallet') : OWNER_TRADING_WALLET).toLowerCase() });
     return { schema: 'perp-canary/trading-authorization/v1', mode: 'LIVE_READ_ONLY', observedAt: sampledAt,
+      rpcUrl: RPC,
       chainId: head.chainId, sampledBlock: head.blockNumber, connectedEoa: eoa ?? 'UNKNOWN',
       tradingWallet: owner, historicalExecutionSigner: HISTORICAL_SENDER, candidateOperator: operator,
       executionSigner: 'UNKNOWN', gasPayer: 'candidate operator if a future transaction is separately authorized',
@@ -188,6 +188,9 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       marginBankUnlocked: margin && market ? formatUnits(margin.unlockedCollateralBalance, market.quoteDecimals) : 'UNKNOWN',
       operatorGasStt: operatorGas === null ? 'UNKNOWN' : formatUnits(operatorGas, 18),
       markPriceRaw: feed?.markPrice?.toString() ?? 'UNKNOWN',
+      bookTops: { blockNumber: book?.blockNumber?.toString() ?? 'UNKNOWN',
+        bestBidRaw: top?.bestBid?.toString() ?? 'UNKNOWN',
+        bestAskRaw: top?.bestAsk?.toString() ?? 'UNKNOWN' },
       estimatedGasUnits: estimatedGasUnits?.toString() ?? 'UNKNOWN',
       gasPriceWei: observedGasPriceWei?.toString() ?? 'UNKNOWN',
       requiredGasWei: requiredGasWei?.toString() ?? 'UNKNOWN',

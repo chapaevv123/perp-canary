@@ -26,13 +26,15 @@ try {
     const orderActionForensics = await readOrderActionForensics(resolve('bot-order-action-forensics'));
     const { readAllExecutionLedgers } = await import('./execution-ledger.ts');
     const botExecutionLedgers = await readAllExecutionLedgers(resolve('bot-execution-ledger'));
+    const { readExecutionDiagnostics } = await import('./execution-diagnostics.ts');
+    const diagnostics = await readExecutionDiagnostics(resolve('bot-execution-diagnostics'));
     console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null,
       executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null,
       tradeArtifacts: trades.length, tradeHashes: trades.map(trade => trade.hash),
       authorizationArtifacts: authorizations.length, authorizationHashes: authorizations.map(artifact => artifact.hash),
       botPlanRecords: botPlans.length, botPlanHead: botPlans.at(-1)?.hash ?? null,
       botForensicRecords: botForensics.length, orderActionForensicRecords: orderActionForensics.length,
-      botExecutionIntents: botExecutionLedgers.length }, null, 2));
+      botExecutionIntents: botExecutionLedgers.length, botExecutionDiagnostics: diagnostics.length }, null, 2));
   } else {
     throw new Error('Usage: npm run snapshot | npm run verify');
   }

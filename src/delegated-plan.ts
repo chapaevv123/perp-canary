@@ -3,6 +3,7 @@ import { sha256 } from './evidence.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import type { inspectTradingAuthorization } from './trading-authorization.ts';
 import type { SimulationFailure } from './preflight-failure.ts';
+import { RPC } from './rpc-health.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
@@ -23,6 +24,8 @@ export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'P
   operation: 'PLACE'; chainId: 50383; owner: string; operator: string; pool: string;
   side: 'BUY' | 'SELL'; price: string; quantity: string; intentId: string;
   observedAt: string; sampledBlock: string; expiresAt: string; markPriceRaw: string;
+  rpcUrl?: string;
+  bookTops?: { blockNumber: string; bestBidRaw: string; bestAskRaw: string };
   positionSizeBeforeRaw: string;
   transaction: { from: string; to: string; data: Hex; value: '0' } | null;
   risk: { maxNotionalWei: string; orderNotionalWei: string; gasLimit: string;
@@ -94,6 +97,8 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
       side: input.side, price: input.price, quantity: input.quantity }),
     observedAt: observation.observedAt, sampledBlock: observation.sampledBlock,
     expiresAt: unsigned?.expiresAt ?? new Date(now).toISOString(), markPriceRaw: observation.markPriceRaw,
+    ...(observation.rpcUrl ? { rpcUrl: observation.rpcUrl } : {}),
+    ...(observation.bookTops ? { bookTops: observation.bookTops } : {}),
     positionSizeBeforeRaw: observation.positionSizeRaw,
     transaction: unsigned ? { from: unsigned.from, to: unsigned.to, data: unsigned.data, value: '0' as const } : null,
     ...(diagnostic ? { diagnostic } : {}),
@@ -126,6 +131,7 @@ export function verifyPreparedPlan(plan: PreparedPlan): void {
     (plan.status === 'PREPARED' && (Date.parse(plan.expiresAt) <= Date.parse(plan.observedAt) ||
       Date.parse(plan.expiresAt) - Date.parse(plan.observedAt) > 240_000)) ||
     plan.chainId !== 50383 || plan.operation !== 'PLACE' || !['BUY', 'SELL'].includes(plan.side) ||
+    (plan.rpcUrl !== undefined && plan.rpcUrl !== RPC) ||
     !same(plan.owner, OWNER_TRADING_WALLET) ||
     !same(plan.pool, BTC_POOL) || (plan.status === 'PREPARED' && !plan.transaction) ||
     (plan.transaction && (!same(plan.transaction.to, BTC_POOL) ||

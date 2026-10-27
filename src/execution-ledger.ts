@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { canonical, sha256 } from './evidence.ts';
 
 export type ExecutionState = 'RESERVED' | 'SIGNED' | 'BROADCAST_UNKNOWN' | 'BROADCAST_ACCEPTED' |
-  'REVERTED' | 'VERIFIED' | 'AMBER' | 'RED';
+  'REVERTED' | 'VERIFIED' | 'AMBER' | 'RED' | 'BLOCKED_PRE_BROADCAST';
 export type ExecutionEntry = { schema: 'perp-canary/execution-state/v1'; planHash: string;
   intentId: string; state: ExecutionState; txHash: string | null; at: string;
   previousHash: string | null; hash: string };
@@ -49,15 +49,15 @@ export async function appendExecutionState(root: string, intentId: string, planH
   if (!history.length && state !== 'RESERVED') throw Error('Intent is not reserved');
   const previousState = history.at(-1)?.state;
   const allowed: Record<ExecutionState, ExecutionState[]> = {
-    RESERVED: ['SIGNED'], SIGNED: ['BROADCAST_UNKNOWN', 'BROADCAST_ACCEPTED',
+    RESERVED: ['SIGNED', 'BLOCKED_PRE_BROADCAST'], SIGNED: ['BROADCAST_UNKNOWN', 'BROADCAST_ACCEPTED',
       'REVERTED', 'VERIFIED', 'AMBER', 'RED'],
     BROADCAST_UNKNOWN: ['REVERTED', 'VERIFIED', 'AMBER', 'RED'],
     BROADCAST_ACCEPTED: ['REVERTED', 'VERIFIED', 'AMBER', 'RED'],
-    REVERTED: [], VERIFIED: [], AMBER: [], RED: [],
+    REVERTED: [], VERIFIED: [], AMBER: [], RED: [], BLOCKED_PRE_BROADCAST: [],
   };
   if (previousState && !allowed[previousState].includes(state)) throw Error('Execution state transition rejected');
-  if ((state === 'RESERVED' && txHash !== null) ||
-    (state !== 'RESERVED' && (!/^0x[0-9a-fA-F]{64}$/.test(txHash ?? '') ||
+  if ((['RESERVED', 'BLOCKED_PRE_BROADCAST'].includes(state) && txHash !== null) ||
+    (!['RESERVED', 'BLOCKED_PRE_BROADCAST'].includes(state) && (!/^0x[0-9a-fA-F]{64}$/.test(txHash ?? '') ||
       (history.length > 1 && history[1]?.txHash?.toLowerCase() !== txHash?.toLowerCase()))))
     throw Error('Execution transaction hash mismatch');
   const body = { schema: 'perp-canary/execution-state/v1' as const, planHash, intentId, state, txHash,
