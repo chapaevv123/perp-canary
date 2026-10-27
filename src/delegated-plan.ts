@@ -1,4 +1,5 @@
 import { decodeFunctionData, getAddress, parseAbi, parseUnits, type Hex } from 'viem';
+import { ORDER_TYPE } from '@somnia-chain/markets-sdk';
 import { sha256 } from './evidence.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import type { inspectTradingAuthorization } from './trading-authorization.ts';
@@ -23,6 +24,7 @@ export function positionEffect(side: 'BUY' | 'SELL', quantity: string, beforeRaw
 export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'PREPARED' | 'BLOCKED';
   operation: 'PLACE'; chainId: 50383; owner: string; operator: string; pool: string;
   side: 'BUY' | 'SELL'; price: string; quantity: string; intentId: string;
+  executionMode?: 'POST_ONLY';
   observedAt: string; sampledBlock: string; expiresAt: string; markPriceRaw: string;
   rpcUrl?: string;
   bookTops?: { blockNumber: string; bestBidRaw: string; bestAskRaw: string };
@@ -36,18 +38,20 @@ export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'P
     failure: SimulationFailure; nextAction: string }; hash: string };
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 export function validatePlaceCall(data: Hex, input: { owner: string; side: 'BUY' | 'SELL'; price: string;
-  quantity: string; expiresAt: string }): boolean {
+  quantity: string; expiresAt: string; executionMode?: 'POST_ONLY' }): boolean {
   try {
     const decoded = decodeFunctionData({ abi: PLACE_ABI, data });
     if (decoded.functionName !== 'placeOrderFor') return false;
     const [owner, isBid, userData, price, quantity, expiresNs, orderType, selfMatch, builder, fee] = decoded.args;
     return same(owner, input.owner) && isBid === (input.side === 'BUY') && userData === 0n &&
       price === parseUnits(input.price, 18) && quantity === parseUnits(input.quantity, 8) &&
-      expiresNs === BigInt(Date.parse(input.expiresAt)) * 1_000_000n && orderType === 2 &&
+      expiresNs === BigInt(Date.parse(input.expiresAt)) * 1_000_000n &&
+      orderType === (input.executionMode === 'POST_ONLY' ? ORDER_TYPE.POST_ONLY : ORDER_TYPE.MARKET) &&
       selfMatch === 0 && same(builder, '0x0000000000000000000000000000000000000000') && fee === 0n;
   } catch { return false; }
 }
-export function buildPreparedPlan(observation: Observation, input: { side: 'BUY' | 'SELL'; price: string; quantity: string },
+export function buildPreparedPlan(observation: Observation, input: { side: 'BUY' | 'SELL'; price: string; quantity: string;
+  executionMode?: 'POST_ONLY' },
   now = Date.now()): PreparedPlan {
   const unsigned = observation.unsigned;
   let orderNotional = 0n;
@@ -57,6 +61,14 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
   const gasPrice = /^\d+$/.test(observation.gasPriceWei) ? BigInt(observation.gasPriceWei) : 0n;
   const gasLimit = estimated * 125n / 100n + 100_000n;
   const gasCost = gasLimit * gasPrice;
+  const postOnly = input.executionMode === 'POST_ONLY';
+  const top = observation.bookTops;
+  const bookFresh = !!top && top.blockNumber === observation.sampledBlock &&
+    top.bestBidRaw !== 'UNKNOWN' && top.bestAskRaw !== 'UNKNOWN';
+  let nonMarketable = false;
+  try { nonMarketable = bookFresh && (input.side === 'BUY' ?
+    parseUnits(input.price, 18) < BigInt(top!.bestAskRaw) :
+    parseUnits(input.price, 18) > BigInt(top!.bestBidRaw)); } catch { /* Fail closed. */ }
   const checks = { chain: observation.chainId === 50383 && unsigned?.chainId === 50383,
     market: observation.market === 'BTC-PERP' && same(observation.pool, BTC_POOL) &&
       observation.marketSupported.status === 'SUPPORTED' && /^\d+$/.test(observation.markPriceRaw) &&
@@ -66,7 +78,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
       !observation.planBlockers.some(blocker => /margin|collateral|placeable|size|voucher/i.test(blocker)),
     gas: gasPrice > 0n && estimated > 0n && gasLimit <= MAX_GAS_LIMIT && gasCost <= MAX_GAS_COST_WEI &&
       observation.operatorGasStt !== 'UNKNOWN' && parseUnits(observation.operatorGasStt === 'UNKNOWN' ? '0' : observation.operatorGasStt, 18) >= gasCost,
-    simulation: observation.simulation.status === 'SUPPORTED',
+    simulation: observation.simulation.status === 'SUPPORTED' && (!postOnly || nonMarketable),
     fresh: now >= Date.parse(observation.observedAt) && now - Date.parse(observation.observedAt) <= 30_000 &&
       !!unsigned && Date.parse(unsigned.expiresAt) > now + 15_000,
     notional: orderNotional > 0n && orderNotional <= MAX_NOTIONAL_WEI,
@@ -74,7 +86,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
       same(unsigned.to, BTC_POOL) && unsigned.value === '0' &&
       same(observation.tradingWallet, OWNER_TRADING_WALLET) &&
       validatePlaceCall(unsigned.data, { owner: OWNER_TRADING_WALLET, side: input.side, price: input.price,
-        quantity: input.quantity, expiresAt: unsigned.expiresAt }),
+        quantity: input.quantity, expiresAt: unsigned.expiresAt, executionMode: input.executionMode }),
   };
   const blockers = [...observation.planBlockers];
   try {
@@ -82,6 +94,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
       blockers.push('Opposite-side PLACE could reduce or flip an existing position; CLOSE_POSITION remains blocked');
   } catch { blockers.push('Position effect unavailable'); }
   for (const [name, passed] of Object.entries(checks)) if (!passed) blockers.push(`${name} gate failed`);
+  if (postOnly && !nonMarketable) blockers.push('PostOnly order is marketable or book snapshot is stale');
   const failure = observation.simulationFailure as SimulationFailure | null;
   const diagnostic = failure ? {
     primaryError: failure.contractError ?? `${failure.category}: ${failure.details}`,
@@ -92,9 +105,11 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
     status: blockers.length ? 'BLOCKED' as const : 'PREPARED' as const, operation: 'PLACE' as const,
     chainId: 50383 as const, owner: getAddress(OWNER_TRADING_WALLET), operator: observation.candidateOperator,
     pool: getAddress(BTC_POOL), side: input.side, price: input.price, quantity: input.quantity,
+    ...(postOnly ? { executionMode: 'POST_ONLY' as const } : {}),
     intentId: sha256({ chainId: 50383, owner: OWNER_TRADING_WALLET.toLowerCase(),
       operator: observation.candidateOperator.toLowerCase(), pool: BTC_POOL.toLowerCase(),
-      side: input.side, price: input.price, quantity: input.quantity }),
+      side: input.side, price: input.price, quantity: input.quantity,
+      ...(postOnly ? { executionMode: 'POST_ONLY' } : {}) }),
     observedAt: observation.observedAt, sampledBlock: observation.sampledBlock,
     expiresAt: unsigned?.expiresAt ?? new Date(now).toISOString(), markPriceRaw: observation.markPriceRaw,
     ...(observation.rpcUrl ? { rpcUrl: observation.rpcUrl } : {}),
@@ -124,13 +139,15 @@ export function verifyPreparedPlan(plan: PreparedPlan): void {
   } catch { riskValid = false; }
   const expectedIntent = sha256({ chainId: 50383, owner: OWNER_TRADING_WALLET.toLowerCase(),
     operator: plan.operator.toLowerCase(), pool: BTC_POOL.toLowerCase(),
-    side: plan.side, price: plan.price, quantity: plan.quantity });
+    side: plan.side, price: plan.price, quantity: plan.quantity,
+    ...(plan.executionMode === 'POST_ONLY' ? { executionMode: 'POST_ONLY' } : {}) });
   if (plan.schema !== 'perp-canary/delegated-plan/v2' || hash !== sha256(body) ||
     (plan.status === 'PREPARED' && !riskValid) || plan.intentId !== expectedIntent ||
     (plan.status === 'PREPARED' && (plan.blockers.length > 0 || Object.values(plan.checks).some(value => !value))) ||
     (plan.status === 'PREPARED' && (Date.parse(plan.expiresAt) <= Date.parse(plan.observedAt) ||
       Date.parse(plan.expiresAt) - Date.parse(plan.observedAt) > 240_000)) ||
     plan.chainId !== 50383 || plan.operation !== 'PLACE' || !['BUY', 'SELL'].includes(plan.side) ||
+    (plan.executionMode !== undefined && plan.executionMode !== 'POST_ONLY') ||
     (plan.rpcUrl !== undefined && plan.rpcUrl !== RPC) ||
     !same(plan.owner, OWNER_TRADING_WALLET) ||
     !same(plan.pool, BTC_POOL) || (plan.status === 'PREPARED' && !plan.transaction) ||

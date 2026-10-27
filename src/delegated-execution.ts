@@ -56,7 +56,7 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
   if (fresh.unsigned && (fresh.unsigned.chainId !== 50383 || !same(fresh.unsigned.to, plan.pool) ||
     !same(fresh.unsigned.from, plan.operator) || fresh.unsigned.value !== '0' ||
     !validatePlaceCall(fresh.unsigned.data, { owner: plan.owner, side: plan.side, price: plan.price,
-      quantity: plan.quantity, expiresAt: fresh.unsigned.expiresAt })))
+      quantity: plan.quantity, expiresAt: fresh.unsigned.expiresAt, executionMode: plan.executionMode })))
     blockers.push('Fresh calldata mismatch');
   const freshFailure = fresh.simulationFailure as { contractError: string | null; category: string } | null;
   if (fresh.simulation.status !== 'SUPPORTED')
@@ -70,10 +70,18 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
   } catch { blockers.push('Market mark unavailable'); }
   try {
     const top = fresh.bookTops;
-    if (top && top.bestAskRaw !== 'UNKNOWN' && plan.side === 'BUY' &&
-      parseUnits(plan.price, 18) < BigInt(top.bestAskRaw)) blockers.push('BUY limit below current best ask');
-    if (top && top.bestBidRaw !== 'UNKNOWN' && plan.side === 'SELL' &&
-      parseUnits(plan.price, 18) > BigInt(top.bestBidRaw)) blockers.push('SELL limit above current best bid');
+    if (plan.executionMode === 'POST_ONLY') {
+      if (!top || top.blockNumber !== fresh.sampledBlock ||
+        top.bestBidRaw === 'UNKNOWN' || top.bestAskRaw === 'UNKNOWN')
+        blockers.push('PostOnly book snapshot unavailable or stale');
+      else if (plan.side === 'BUY' ? parseUnits(plan.price, 18) >= BigInt(top.bestAskRaw) :
+        parseUnits(plan.price, 18) <= BigInt(top.bestBidRaw)) blockers.push('PostOnly would cross current book');
+    } else {
+      if (top && top.bestAskRaw !== 'UNKNOWN' && plan.side === 'BUY' &&
+        parseUnits(plan.price, 18) < BigInt(top.bestAskRaw)) blockers.push('BUY limit below current best ask');
+      if (top && top.bestBidRaw !== 'UNKNOWN' && plan.side === 'SELL' &&
+        parseUnits(plan.price, 18) > BigInt(top.bestBidRaw)) blockers.push('SELL limit above current best bid');
+    }
   } catch { blockers.push('Current book top invalid'); }
   if (!Number.isSafeInteger(input.latestNonce) || !Number.isSafeInteger(input.pendingNonce) ||
     input.latestNonce !== input.pendingNonce) blockers.push('Nonce pending or invalid');

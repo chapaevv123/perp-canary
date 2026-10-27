@@ -1,4 +1,4 @@
-import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/markets-sdk';
+import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES, ORDER_TYPE } from '@somnia-chain/markets-sdk';
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { createPublicClient, encodeFunctionData, formatUnits, getAddress, http, isAddress, parseAbi, parseUnits, toFunctionSelector, type Address, type Hex } from 'viem';
 import { withSnapshotSdk } from './lifecycle.ts';
@@ -48,7 +48,7 @@ const positive = (value: string, decimals: number, label: string): bigint => {
   return amount;
 };
 export type AuthorizationInput = { eoa?: string; tradingWallet?: string; operator?: string; pool?: string;
-  side?: 'BUY' | 'SELL'; price?: string; quantity?: string };
+  side?: 'BUY' | 'SELL'; price?: string; quantity?: string; executionMode?: 'IOC' | 'POST_ONLY' };
 export type AuthorizationDecision = { status: 'BLOCKED' | 'UNKNOWN'; blockers: string[]; nextStep: string };
 export function decideAuthorization(input: { chainId: number; marketSupported: boolean | null; registryMatches: boolean | null;
   placeAuthorized: boolean | null; gasWei: bigint | null; requiredGasWei: bigint | null;
@@ -79,6 +79,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
   if ((input.price || input.quantity || input.side) && (!input.price || !input.quantity || !input.side))
     throw Error('Side, price and quantity are all required for an unsigned prototype');
   if (input.side && !['BUY', 'SELL'].includes(input.side)) throw Error('Side must be BUY or SELL');
+  if (input.executionMode && !['IOC', 'POST_ONLY'].includes(input.executionMode))
+    throw new AuthorizationInputError('Unsupported delegated order mode');
   const head = await readRpcHead();
   const sampledAt = new Date().toISOString();
   const client = createPublicClient({ chain: hidekiTestnet, transport: http(RPC, { timeout: 15_000, retryCount: 1 }) });
@@ -131,6 +133,13 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     if (input.price && input.quantity && input.side && market) {
       const price = positive(input.price, market.quoteDecimals, 'price');
       const quantity = positive(input.quantity, market.baseDecimals, 'quantity');
+      if (input.executionMode === 'POST_ONLY') {
+        const opposite = input.side === 'BUY' ? top?.bestAsk : top?.bestBid;
+        if (!opposite || (input.side === 'BUY' ? price >= BigInt(opposite) : price <= BigInt(opposite)))
+          planBlockers.push('PostOnly price is marketable or opposite book top is unavailable');
+        if (!book || book.blockNumber.toString() !== head.blockNumber)
+          planBlockers.push('PostOnly book snapshot is not pinned to the sampled block');
+      }
       if (price % BigInt(market.tickSize) !== 0n) planBlockers.push('Price is off market tick grid');
       if (quantity % BigInt(market.lotSize) !== 0n || quantity < BigInt(market.minQuantity)) planBlockers.push('Quantity is off market lot grid or below minimum');
       if (!marketSupported) planBlockers.push('Market registration, tradeability, feed or system wiring is not verified');
@@ -152,7 +161,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
         const expiresNs = BigInt(Date.now() + 120_000) * 1_000_000n;
         unsigned = { chainId: 50383, from: operator, to: pool, value: '0',
           data: encodeFunctionData({ abi: POOL_ABI, functionName: 'placeOrderFor',
-            args: [owner, input.side === 'BUY', 0n, price, quantity, expiresNs, 2, 0, ZERO, 0n] }),
+            args: [owner, input.side === 'BUY', 0n, price, quantity, expiresNs,
+              input.executionMode === 'POST_ONLY' ? ORDER_TYPE.POST_ONLY : ORDER_TYPE.MARKET, 0, ZERO, 0n] }),
           expiresAt: new Date(Number(expiresNs / 1_000_000n)).toISOString() };
         const gas = await client.estimateGas({ account: operator, to: pool, data: unsigned.data, value: 0n })
           .catch(async (error: unknown) => {

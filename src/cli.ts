@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { readdir } from 'node:fs/promises';
 import { appendSnapshot, readSnapshots } from './evidence.ts';
 
 const dir = resolve('evidence');
@@ -28,13 +29,22 @@ try {
     const botExecutionLedgers = await readAllExecutionLedgers(resolve('bot-execution-ledger'));
     const { readExecutionDiagnostics } = await import('./execution-diagnostics.ts');
     const diagnostics = await readExecutionDiagnostics(resolve('bot-execution-diagnostics'));
+    const proofDir = resolve('canary-proofs');
+    const proofFiles = await readdir(proofDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [] as string[];
+      throw error;
+    });
+    const { readCanaryProof } = await import('./canary-proof.ts');
+    const proofs = await Promise.all(proofFiles.filter(name => /^canary-proof-\d{13}-[0-9a-f]{12}\.json$/.test(name))
+      .map(name => readCanaryProof(join(proofDir, name))));
     console.log(JSON.stringify({ valid: true, snapshots: snapshots.length, head: snapshots.at(-1)?.hash ?? null,
       executionRecords: execution.length, executionHead: execution.at(-1)?.hash ?? null,
       tradeArtifacts: trades.length, tradeHashes: trades.map(trade => trade.hash),
       authorizationArtifacts: authorizations.length, authorizationHashes: authorizations.map(artifact => artifact.hash),
       botPlanRecords: botPlans.length, botPlanHead: botPlans.at(-1)?.hash ?? null,
       botForensicRecords: botForensics.length, orderActionForensicRecords: orderActionForensics.length,
-      botExecutionIntents: botExecutionLedgers.length, botExecutionDiagnostics: diagnostics.length }, null, 2));
+      botExecutionIntents: botExecutionLedgers.length, botExecutionDiagnostics: diagnostics.length,
+      canaryProofBundles: proofs.length }, null, 2));
   } else {
     throw new Error('Usage: npm run snapshot | npm run verify');
   }

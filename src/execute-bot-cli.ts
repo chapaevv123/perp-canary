@@ -156,7 +156,8 @@ async function main(): Promise<void> {
   }
   const readOnlyPorts: ReadOnlyExecutionPorts = {
     fresh: () => inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
-      operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price, quantity: plan.quantity }),
+      operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price,
+      quantity: plan.quantity, executionMode: plan.executionMode }),
     chainId: () => client.getChainId(),
     nonce: tag => client.getTransactionCount({ address: keystore.address as Address, blockTag: tag }),
     gasPrice: () => client.getGasPrice(),
@@ -172,7 +173,8 @@ async function main(): Promise<void> {
   }
   console.log(JSON.stringify({ planHash: plan.hash, status: plan.status, chainId: plan.chainId,
     owner: plan.owner, operator: plan.operator, pool: plan.pool, side: plan.side,
-    price: plan.price, quantity: plan.quantity, notionalWei: plan.risk.orderNotionalWei,
+    price: plan.price, quantity: plan.quantity, executionMode: plan.executionMode ?? 'IOC',
+    notionalWei: plan.risk.orderNotionalWei,
     positionSizeBeforeRaw: plan.positionSizeBeforeRaw,
     positionEffect: positionEffect(plan.side, plan.quantity, plan.positionSizeBeforeRaw),
     gasLimit: plan.risk.gasLimit, gasBudgetWei: plan.risk.maxGasCostWei,
@@ -192,7 +194,8 @@ async function main(): Promise<void> {
           balance < BigInt(plan.risk.gasLimit) * BigInt(transaction.gasPrice ?? 0n))
           throw Error('Nonce, gas price, or balance changed before signing');
         const permission = await inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
-          operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price, quantity: plan.quantity });
+          operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price,
+          quantity: plan.quantity, executionMode: plan.executionMode });
         let simulatedGas: bigint;
         try { simulatedGas = await client.estimateGas({ account: keystore.address as Address,
           to: plan.transaction!.to as Address, data: plan.transaction!.data, value: 0n }); }

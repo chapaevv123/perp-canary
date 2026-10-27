@@ -16,6 +16,11 @@ test('confirmed SDK ABI errors decode through nested viem shapes', () => {
     ['InsufficientMargin', 'INSUFFICIENT_MARGIN'],
     ['OnlyApprovedContracts', 'PERMISSION_DENIED'],
     ['PriceOutOfBounds', 'PRICE_OUT_OF_BOUNDS'],
+    ['InsufficientCollateral', 'INSUFFICIENT_COLLATERAL'],
+    ['MaxPositionSizeExceeded', 'MAX_POSITION_SIZE'],
+    ['VoucherMarketNotAllowed', 'MARKET_BLOCKED'],
+    ['FreshMarketRequired', 'STALE_MARKET'],
+    ['PostOnlyWouldCross', 'POST_ONLY_WOULD_CROSS'],
   ] as const;
   for (const [name, reason] of errors) {
     const data = encodeErrorResult({ abi: contractErrorsAbi, errorName: name });
@@ -25,6 +30,10 @@ test('confirmed SDK ABI errors decode through nested viem shapes', () => {
     assert.equal(decoded.selector, data.slice(0, 10));
     assert.equal(decoded.transactionSent, 'NO');
   }
+  assert.deepEqual(decodeExecutionError({ name: 'EstimateGasExecutionError',
+    cause: { name: 'ContractFunctionRevertedError', data: '0x7cf05fcb' } },
+  'ESTIMATE_GAS').nestedCauseNames,
+  ['EstimateGasExecutionError', 'ContractFunctionRevertedError']);
 });
 
 test('unknown or missing revert data never becomes IOC_NO_FILL', () => {

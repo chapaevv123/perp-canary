@@ -8,18 +8,27 @@ export type ErrorClass = 'CONTRACT_REVERT' | 'RPC_TRANSPORT' | 'SDK' | 'LOCAL_VA
   'EXECUTION_UNCERTAINTY';
 export type ExecutionReason = 'IOC_NO_FILL' | 'INSUFFICIENT_MARGIN' | 'PERMISSION_DENIED' |
   'WRONG_CHAIN' | 'INVALID_ORDER' | 'INVALID_QUANTITY' | 'PRICE_OUT_OF_BOUNDS' |
+  'INSUFFICIENT_COLLATERAL' | 'MAX_POSITION_SIZE' | 'MARKET_BLOCKED' |
+  'POST_ONLY_WOULD_CROSS' | 'STALE_MARKET' |
   'NONCE_CONFLICT' | 'PLAN_EXPIRED' | 'UNKNOWN_REVERT' | 'RPC_FAILURE' |
   'SDK_FAILURE' | 'LOCAL_FAILURE' | 'BROADCAST_UNKNOWN';
 export type DecodedExecutionError = { stage: ExecutionStage; errorClass: ErrorClass;
   reason: ExecutionReason; selector: string | null; contractError: string | null;
   rootCause: string; dependentFailures: string[]; safeNextAction: string;
-  transactionSent: 'NO' | 'UNKNOWN' | 'YES'; rpcCode: number | null };
+  transactionSent: 'NO' | 'UNKNOWN' | 'YES'; rpcCode: number | null;
+  nestedCauseNames: string[] };
 
 const names: Record<string, ExecutionReason> = {
   ImmediateOrCancelNoFill: 'IOC_NO_FILL',
   InsufficientMargin: 'INSUFFICIENT_MARGIN',
   InsufficientMarginForOrder: 'INSUFFICIENT_MARGIN',
   InsufficientMarginAtCreation: 'INSUFFICIENT_MARGIN',
+  InsufficientCollateral: 'INSUFFICIENT_COLLATERAL',
+  MaxPositionSizeExceeded: 'MAX_POSITION_SIZE',
+  VoucherMarketNotAllowed: 'MARKET_BLOCKED',
+  MarketRestricted: 'MARKET_BLOCKED',
+  FreshMarketRequired: 'STALE_MARKET',
+  PostOnlyWouldCross: 'POST_ONLY_WOULD_CROSS',
   OnlyApprovedContracts: 'PERMISSION_DENIED',
   InvalidOrderOwner: 'INVALID_ORDER',
   InvalidOrderPair: 'INVALID_ORDER',
@@ -36,6 +45,11 @@ const defaultAction = 'Inspect saved diagnostics, refresh live state, and create
 const actions: Partial<Record<ExecutionReason, string>> = {
   IOC_NO_FILL: 'Review the current ask and your slippage limit, then create a fresh plan with a manually chosen limit.',
   INSUFFICIENT_MARGIN: 'Recheck unlocked margin and position; create a fresh plan only after collateral is sufficient.',
+  INSUFFICIENT_COLLATERAL: 'Recheck available collateral and voucher restrictions before creating a fresh plan.',
+  MAX_POSITION_SIZE: 'Review current position and protocol size limits; do not increase the approved quantity.',
+  MARKET_BLOCKED: 'Check the official market and voucher allowlist; do not bypass the blocked market.',
+  POST_ONLY_WOULD_CROSS: 'Refresh the book and manually choose a non-marketable price in a new plan.',
+  STALE_MARKET: 'Wait for a fresh supported mark and book, then create a new plan.',
   PERMISSION_DENIED: 'Verify the bot grant for this owner and BTC-PERP before creating a fresh plan.',
   WRONG_CHAIN: 'Connect to Hideki 50383 and recheck; never send on another chain.',
   NONCE_CONFLICT: 'Inspect pending bot transactions and reconcile before preparing a new independent intent.',
@@ -43,17 +57,21 @@ const actions: Partial<Record<ExecutionReason, string>> = {
   BROADCAST_UNKNOWN: 'Do not retry. Reconcile the reserved signed hash against the chain.',
   RPC_FAILURE: 'Check Hideki RPC health and repeat read-only checks; never bypass simulation.',
 };
-function nested(error: unknown): { data: Hex | null; code: number | null; message: string } {
+function nested(error: unknown): { data: Hex | null; code: number | null; message: string;
+  causeNames: string[] } {
   const queue: unknown[] = [error];
   const seen = new Set<unknown>();
   let data: Hex | null = null;
   let code: number | null = null;
   let message = '';
+  const causeNames: string[] = [];
   while (queue.length) {
     const current = queue.shift();
     if (!current || typeof current !== 'object' || seen.has(current)) continue;
     seen.add(current);
     const value = current as Record<string, unknown>;
+    if (typeof value.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,79}$/.test(value.name))
+      causeNames.push(value.name);
     if (typeof value.code === 'number' && code === null) code = value.code;
     if (typeof value.data === 'string' && /^0x(?:[0-9a-fA-F]{2})*$/.test(value.data) &&
       value.data.length >= 10 && data === null) data = value.data as Hex;
@@ -61,7 +79,7 @@ function nested(error: unknown): { data: Hex | null; code: number | null; messag
     for (const child of [value.cause, value.data, value.error, value.originalError])
       if (child && typeof child === 'object') queue.push(child);
   }
-  return { data, code, message };
+  return { data, code, message, causeNames: [...new Set(causeNames)] };
 }
 export function decodeExecutionError(error: unknown, stage: ExecutionStage,
   transactionSent: 'NO' | 'UNKNOWN' | 'YES' = 'NO'): DecodedExecutionError {
@@ -102,5 +120,6 @@ export function decodeExecutionError(error: unknown, stage: ExecutionStage,
         `${reason} at ${stage}`;
   return { stage, errorClass, reason, selector, contractError, rootCause,
     dependentFailures: stage === 'ESTIMATE_GAS' ? ['preflight', 'confirmation', 'signing', 'broadcast'] : [],
-    safeNextAction: actions[reason] ?? defaultAction, transactionSent, rpcCode: extracted.code };
+    safeNextAction: actions[reason] ?? defaultAction, transactionSent, rpcCode: extracted.code,
+    nestedCauseNames: extracted.causeNames };
 }

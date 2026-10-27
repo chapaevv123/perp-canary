@@ -9,6 +9,7 @@ import { parseUnits } from 'viem';
 export type ExecutionVerdict = 'VERIFIED' | 'AMBER' | 'RED';
 export type ExecutionForensic = { schema: 'perp-canary/delegated-forensic/v1'; planHash: string;
   intentId: string; txHash: string; verdict: ExecutionVerdict; observedAt: string;
+  executionKind?: 'RESTING' | 'FULL_FILL' | 'PARTIAL_FILL' | 'NO_FILL' | 'UNKNOWN';
   expectedQuantityRaw: string; filledQuantityRaw: string; positionBeforeRaw: string;
   positionAfterEventRaw: string | null; positionAfterReadRaw: string | null;
   orderId: string | null; reasons: string[]; sourceHash: string; source: ForensicsBody; hash: string };
@@ -45,6 +46,8 @@ export function assessDelegatedTrade(plan: PreparedPlan, body: ForensicsBody,
     String(placedOrder.price) !== limitPrice.toString()) red.push('OrderPlaced side, price or quantity mismatch');
   const fills = body.decodedEvents.filter(e => e.eventName === 'OrderFilled' && same(e.address, plan.pool) &&
     orderId !== null && String(args(e).takerOrderId) === orderId);
+  const rested = body.decodedEvents.find(e => e.eventName === 'OrderRested' && same(e.address, plan.pool) &&
+    orderId !== null && String(args(e).orderId) === orderId);
   let filled = 0n;
   for (const fill of fills) {
     try {
@@ -56,8 +59,15 @@ export function assessDelegatedTrade(plan: PreparedPlan, body: ForensicsBody,
     } catch { red.push('Malformed fill event'); }
   }
   if (filled > expected) red.push('Overfill');
-  if (!fills.length) amber.push('No OrderFilled event');
-  else if (filled < expected) amber.push('Partial fill');
+  if (plan.executionMode === 'POST_ONLY') {
+    if (fills.length || filled !== 0n) red.push('PostOnly order filled during placement');
+    if (!rested) amber.push('OrderRested event missing');
+    if (placedOrder && String(placedOrder.quantityRemaining) !== expected.toString())
+      red.push('PostOnly remaining quantity differs from approved quantity');
+  } else {
+    if (!fills.length) amber.push('No OrderFilled event');
+    else if (filled < expected) amber.push('Partial fill');
+  }
   const positionEvent = body.decodedEvents.filter(e => e.eventName === 'PositionUpdated' &&
     same(e.args.account, plan.owner) && same(e.args.perpPool, plan.pool)).at(-1);
   const positionAfter = positionEvent ? String(positionEvent.args.newSize) : null;
@@ -65,7 +75,8 @@ export function assessDelegatedTrade(plan: PreparedPlan, body: ForensicsBody,
   if (currentPositionRaw !== null && !positionAfter) {
     try {
       if (BigInt(currentPositionRaw) !== BigInt(plan.positionSizeBeforeRaw))
-        red.push('Position changed without matching PositionUpdated event');
+        (plan.executionMode === 'POST_ONLY' ? amber : red)
+          .push('Position changed after placement without a matching event in this receipt');
     } catch { red.push('Malformed current position'); }
   }
   if (positionAfter) {
@@ -77,12 +88,15 @@ export function assessDelegatedTrade(plan: PreparedPlan, body: ForensicsBody,
     } catch { red.push('Malformed position event'); }
   }
   const verdict: ExecutionVerdict = red.length ? 'RED' : amber.length ? 'AMBER' : 'VERIFIED';
+  const executionKind: NonNullable<ExecutionForensic['executionKind']> = plan.executionMode === 'POST_ONLY' ?
+    rested && !fills.length ? 'RESTING' : 'UNKNOWN' :
+    filled === expected ? 'FULL_FILL' : filled > 0n ? 'PARTIAL_FILL' : 'NO_FILL';
   const sourceHash = sha256(body);
   const record = { schema: 'perp-canary/delegated-forensic/v1' as const, planHash: plan.hash,
     intentId: plan.intentId, txHash: body.txHash, verdict, observedAt: new Date().toISOString(),
     expectedQuantityRaw: expected.toString(), filledQuantityRaw: filled.toString(),
     positionBeforeRaw: plan.positionSizeBeforeRaw, positionAfterEventRaw: positionAfter,
-    positionAfterReadRaw: currentPositionRaw, orderId, reasons: [...red, ...amber], sourceHash,
+    positionAfterReadRaw: currentPositionRaw, orderId, executionKind, reasons: [...red, ...amber], sourceHash,
     source: body };
   return { ...record, hash: sha256(record) };
 }
