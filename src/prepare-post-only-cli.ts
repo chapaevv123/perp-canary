@@ -18,6 +18,7 @@ try {
   if (plan.status !== 'PREPARED') {
     console.log(JSON.stringify({ status: 'BLOCKED', blockers: plan.blockers,
       bestBidRaw: observation.bookTops.bestBidRaw, bestAskRaw: observation.bookTops.bestAskRaw,
+      marketIntegrity: observation.marketIntegrity, bookMetadata: observation.bookTops,
       sampledBlock: observation.sampledBlock, transactionSent: 'NO' }, null, 2));
     process.exitCode = 1;
   } else {

@@ -6,6 +6,7 @@ import { assessDelegatedTrade, saveForensicEvidence } from './delegated-forensic
 import type { ForensicsBody } from './trade-forensics.ts';
 import type { ExecutionStage } from './execution-error-decoder.ts';
 import { parseUnits } from 'viem';
+import { validateMarketSnapshot } from './market-integrity.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export type ExecutionPorts = { fresh: () => Promise<Observation>; chainId: () => Promise<number>;
@@ -21,7 +22,11 @@ export type PreflightState = { passed: boolean; blockers: string[]; nonce: numbe
   marketComparison: { bestBidAtPlanRaw: string; bestAskAtPlanRaw: string;
     bestBidNowRaw: string; bestAskNowRaw: string; markAtPlanRaw: string;
     markNowRaw: string; markDeviationBps: string | null; orderNotionalWei: string;
-    unlockedMarginNow: string; estimatedGasUnits: string } };
+    unlockedMarginNow: string; estimatedGasUnits: string;
+    planIntegrity: string; currentIntegrity: string;
+    currentIntegrityReasons: string[]; currentSource: string;
+    currentBlockNumber: string; currentBlockHash: string; currentPostReadBlockHash: string;
+    currentBlockTimestamp: string; currentObservedAt: string } };
 export class ExecutionStageError extends Error {
   readonly stage: ExecutionStage;
   readonly original: unknown;
@@ -35,11 +40,35 @@ export class ExecutionStageError extends Error {
   }
 }
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const planBookTime = (plan: PreparedPlan, fallback: number) => {
+  const parsed = Date.parse(plan.bookTops?.observedAt ?? '');
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+export function assertExecutionMarketIntegrity(plan: PreparedPlan, fresh: Observation,
+  now = Date.now()): void {
+  const planned = validateMarketSnapshot(plan.bookTops, { market: 'BTC-PERP', pool: plan.pool,
+    sampledBlock: plan.sampledBlock, markPriceRaw: plan.markPriceRaw,
+    now: planBookTime(plan, now) });
+  const current = validateMarketSnapshot(fresh.bookTops, { market: fresh.market, pool: fresh.pool,
+    sampledBlock: fresh.sampledBlock, markPriceRaw: fresh.markPriceRaw, now });
+  if (planned.status !== 'TRUSTED' || current.status !== 'TRUSTED')
+    throw new ExecutionStageError('PREFLIGHT', Error(`UNTRUSTED_MARKET_SNAPSHOT: plan ${planned.reasons.join(', ') || 'OK'}; current ${current.reasons.join(', ') || 'OK'}`), fresh);
+}
 export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation, input: {
   chainId: number; latestNonce: number; pendingNonce: number; gasPrice: bigint; gasBalance: bigint;
   simulatedGas: bigint; now: number }): PreflightState {
   verifyPreparedPlan(plan);
   const blockers: string[] = [];
+  const planIntegrity = validateMarketSnapshot(plan.bookTops, { market: 'BTC-PERP',
+    pool: plan.pool, sampledBlock: plan.sampledBlock, markPriceRaw: plan.markPriceRaw,
+    now: planBookTime(plan, input.now) });
+  const freshIntegrity = validateMarketSnapshot(fresh.bookTops, { market: fresh.market,
+    pool: fresh.pool, sampledBlock: fresh.sampledBlock, markPriceRaw: fresh.markPriceRaw,
+    now: input.now });
+  if (planIntegrity.status !== 'TRUSTED')
+    blockers.push(`UNTRUSTED_MARKET_SNAPSHOT at plan: ${planIntegrity.reasons.join(', ')}`);
+  if (freshIntegrity.status !== 'TRUSTED')
+    blockers.push(`UNTRUSTED_MARKET_SNAPSHOT at recheck: ${freshIntegrity.reasons.join(', ')}`);
   if (plan.status !== 'PREPARED' || Object.values(plan.checks).some(value => !value)) blockers.push('Saved plan was not prepared');
   if (input.chainId !== 50383) blockers.push('Wrong chain ID');
   if (input.now >= Date.parse(plan.expiresAt) || input.now < Date.parse(plan.observedAt)) blockers.push('Plan expired or clock invalid');
@@ -70,7 +99,8 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
   } catch { blockers.push('Market mark unavailable'); }
   try {
     const top = fresh.bookTops;
-    if (plan.executionMode === 'POST_ONLY') {
+    if (freshIntegrity.status !== 'TRUSTED') { /* Integrity blocker above is authoritative. */ }
+    else if (plan.executionMode === 'POST_ONLY') {
       if (!top || top.blockNumber !== fresh.sampledBlock ||
         top.bestBidRaw === 'UNKNOWN' || top.bestAskRaw === 'UNKNOWN')
         blockers.push('PostOnly book snapshot unavailable or stale');
@@ -110,10 +140,18 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
       markDeviationBps, orderNotionalWei: plan.risk.orderNotionalWei,
       unlockedMarginNow: fresh.marginBankUnlocked,
       estimatedGasUnits: input.simulatedGas.toString(),
+      planIntegrity: planIntegrity.status, currentIntegrity: freshIntegrity.status,
+      currentIntegrityReasons: freshIntegrity.reasons,
+      currentSource: freshIntegrity.source, currentBlockNumber: freshIntegrity.blockNumber,
+      currentBlockHash: freshIntegrity.blockHash,
+      currentPostReadBlockHash: freshIntegrity.postReadBlockHash,
+      currentBlockTimestamp: freshIntegrity.blockTimestamp,
+      currentObservedAt: freshIntegrity.observedAt,
     } };
 }
 export type ExecutionOutcome = { state: 'CANCELLED' | 'BLOCKED' | 'UNKNOWN' | 'VERIFIED' | 'AMBER' | 'RED';
-  planHash: string; txHash: string | null; reasons: string[]; forensicHash?: string };
+  planHash: string; txHash: string | null; reasons: string[]; forensicHash?: string;
+  marketComparison?: PreflightState['marketComparison'] };
 export async function dispatchApprovedTransaction(input: { planHash: string; intentId: string;
   operator: string; pool: string; data: Hex; gasLimit: string; gasPriceWei: string; nonce: number },
   ports: Pick<ExecutionPorts, 'sign' | 'verifySigned' | 'broadcastOnce'>,
@@ -167,11 +205,13 @@ export async function executeDelegatedPlan(plan: PreparedPlan, ports: ExecutionP
   if (plan.status !== 'PREPARED') return { ...base, state: 'BLOCKED', reasons: plan.blockers };
   if (Date.now() >= Date.parse(plan.expiresAt)) return { ...base, state: 'BLOCKED', reasons: ['Plan expired'] };
   const first = await gatherPreflight(plan, ports);
-  if (!first.passed) return { ...base, state: 'BLOCKED', reasons: first.blockers };
+  if (!first.passed) return { ...base, state: 'BLOCKED', reasons: first.blockers,
+    marketComparison: first.marketComparison };
   if (!await ports.confirm(plan)) return { ...base, state: 'CANCELLED', reasons: ['Owner did not confirm exact plan hash'] };
   const second = await gatherPreflight(plan, ports);
   if (!second.passed || second.nonce !== first.nonce) return { ...base, state: 'BLOCKED',
-    reasons: [...second.blockers, ...(second.nonce !== first.nonce ? ['Nonce changed before signing'] : [])] };
+    reasons: [...second.blockers, ...(second.nonce !== first.nonce ? ['Nonce changed before signing'] : [])],
+    marketComparison: second.marketComparison };
   return dispatchApprovedTransaction({ planHash: plan.hash, intentId: plan.intentId,
     operator: plan.operator, pool: plan.pool, data: plan.transaction!.data,
     gasLimit: plan.risk.gasLimit, gasPriceWei: second.gasPriceWei, nonce: second.nonce },
@@ -195,6 +235,7 @@ async function gatherPreflight(plan: PreparedPlan, ports: ReadOnlyExecutionPorts
   let fresh: Observation;
   try { fresh = await ports.fresh(); }
   catch (error) { throw new ExecutionStageError('FRESH_STATE', error); }
+  assertExecutionMarketIntegrity(plan, fresh);
   const tasks = [ports.chainId(), ports.nonce('latest'), ports.nonce('pending'),
     ports.gasPrice(), ports.gasBalance(), ports.estimateOriginal(plan)] as const;
   const stages: ExecutionStage[] = ['CHAIN', 'NONCE', 'NONCE', 'GAS_PRICE', 'GAS_BALANCE', 'ESTIMATE_GAS'];

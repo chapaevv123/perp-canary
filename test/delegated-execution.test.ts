@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { encodeFunctionData, keccak256, parseUnits, type Hex } from 'viem';
 import { buildPreparedPlan, PLACE_ABI, positionEffect, verifyPreparedPlan } from '../src/delegated-plan.ts';
 import { appendBotPlanEvidence, readBotPlanEvidence } from '../src/bot-evidence.ts';
-import { assessExecutionPreflight, checkDelegatedPlan, ExecutionStageError,
+import { assessExecutionPreflight, assertExecutionMarketIntegrity, checkDelegatedPlan, ExecutionStageError,
   executeDelegatedPlan, type ExecutionPorts } from '../src/delegated-execution.ts';
 import { decodeExecutionError } from '../src/execution-error-decoder.ts';
 import { assessDelegatedTrade, readForensicEvidence, saveForensicEvidence } from '../src/delegated-forensics.ts';
@@ -15,6 +15,8 @@ import { BTC_POOL, OWNER_TRADING_WALLET, type ForensicsBody } from '../src/trade
 import { signedFieldsMatch } from '../src/signed-transaction.ts';
 import { classifySimulationFailure } from '../src/preflight-failure.ts';
 import { RPC } from '../src/rpc-health.ts';
+import { BOOK_SOURCE } from '../src/market-integrity.ts';
+import { sha256 } from '../src/evidence.ts';
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
@@ -33,6 +35,15 @@ function observation(changes: Record<string, unknown> = {},
     permissions: { place: { effective: { status: 'SUPPORTED' } } }, marginSufficient: true,
     marginBankUnlocked: '1000', operatorGasStt: '5', markPriceRaw: parseUnits('80000', 18).toString(),
     positionSizeRaw: '0', estimatedGasUnits: '2000000', gasPriceWei: '6000000000',
+    bookTops: { market: 'BTC-PERP', pool: BTC_POOL, source: BOOK_SOURCE, rpcUrl: RPC,
+      blockNumber: '34017211', blockHash: `0x${'ab'.repeat(32)}`,
+      postReadBlockHash: `0x${'ab'.repeat(32)}`,
+      blockTimestamp: new Date().toISOString(), observedAt: new Date().toISOString(),
+      quoteDecimals: 18, tickSizeRaw: parseUnits('0.1', 18).toString(),
+      bestBidRaw: parseUnits('79999', 18).toString(),
+      bestAskRaw: parseUnits('80000', 18).toString(),
+      directBestBidRaw: parseUnits('79999', 18).toString(),
+      directBestAskRaw: parseUnits('80000', 18).toString() },
     planBlockers: [], simulation: { status: 'SUPPORTED' },
     unsigned: { chainId: 50383, from: BOT, to: BTC_POOL, value: '0', data, expiresAt },
     ...changes } as unknown as Observation;
@@ -323,10 +334,43 @@ test('read-only preflight detects sender, RPC chain, calldata and changed ask', 
   const data = observation().unsigned!.data.replace(/.$/, '1') as Hex;
   const calldata = observation({ unsigned: { ...observation().unsigned, data } });
   assert.match(assessExecutionPreflight(p, calldata, base).blockers.join(' '), /calldata mismatch/);
-  const book = observation({ bookTops: { blockNumber: '1',
+  const book = observation({ bookTops: { ...observation().bookTops,
     bestBidRaw: parseUnits('79999', 18).toString(),
-    bestAskRaw: parseUnits('80001', 18).toString() } });
+    bestAskRaw: parseUnits('80001', 18).toString(),
+    directBestBidRaw: parseUnits('79999', 18).toString(),
+    directBestAskRaw: parseUnits('80001', 18).toString() } });
   assert.match(assessExecutionPreflight(p, book, base).blockers.join(' '), /below current best ask/);
+});
+
+test('IOC preparation, check and final pre-sign all reject a crossed pinned book', async () => {
+  const crossed = observation({ bookTops: { ...observation().bookTops,
+    bestBidRaw: parseUnits('80010', 18).toString(),
+    bestAskRaw: parseUnits('80000', 18).toString(),
+    directBestBidRaw: parseUnits('80010', 18).toString(),
+    directBestAskRaw: parseUnits('80000', 18).toString() } });
+  assert.equal(buildPreparedPlan(crossed, input).status, 'BLOCKED');
+  const p = plan();
+  assert.throws(() => assertExecutionMarketIntegrity(p, crossed), /Read-only execution check failed/);
+  let estimateCalled = false;
+  await assert.rejects(checkDelegatedPlan(p, { ...ports(p), fresh: async () => crossed,
+    estimateOriginal: async () => { estimateCalled = true; return 2_000_000n; } }),
+  error => error instanceof ExecutionStageError &&
+    (error.original as Error).message.includes('CROSSED_BOOK'));
+  assert.equal(estimateCalled, false);
+});
+
+test('a previously PREPARED plan without integrity provenance cannot bypass the hotfix', async () => {
+  const current = plan();
+  const { hash: originalHash, ...body } = current;
+  assert.equal(originalHash, current.hash);
+  const oldBody = { ...body, bookTops: { blockNumber: current.sampledBlock,
+    bestBidRaw: parseUnits('79999', 18).toString(),
+    bestAskRaw: parseUnits('80000', 18).toString() } };
+  const old = { ...oldBody, hash: sha256(oldBody) };
+  assert.doesNotThrow(() => verifyPreparedPlan(old));
+  await assert.rejects(checkDelegatedPlan(old, ports(old)), error =>
+    error instanceof ExecutionStageError &&
+    (error.original as Error).message.includes('MISSING_FRESHNESS_METADATA'));
 });
 
 test('signing failure records terminal pre-broadcast state without a fake tx hash', async () => {

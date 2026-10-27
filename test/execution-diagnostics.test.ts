@@ -53,6 +53,8 @@ test('local chain, nonce, expiry and uncertain broadcast remain distinct', () =>
   assert.equal(decodeExecutionError(Error('Wrong chain ID'), 'CHAIN').reason, 'WRONG_CHAIN');
   assert.equal(decodeExecutionError(Error('Nonce conflict'), 'NONCE').reason, 'NONCE_CONFLICT');
   assert.equal(decodeExecutionError(Error('Plan expired'), 'PREFLIGHT').reason, 'PLAN_EXPIRED');
+  assert.equal(decodeExecutionError(Error('UNTRUSTED_MARKET_SNAPSHOT: CROSSED_BOOK'),
+    'PREFLIGHT').reason, 'UNTRUSTED_MARKET_SNAPSHOT');
   const unknown = decodeExecutionError(Error('timeout'), 'BROADCAST', 'UNKNOWN');
   assert.equal(unknown.reason, 'BROADCAST_UNKNOWN');
   assert.equal(unknown.transactionSent, 'UNKNOWN');

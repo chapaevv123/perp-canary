@@ -5,6 +5,7 @@ import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import type { inspectTradingAuthorization } from './trading-authorization.ts';
 import type { SimulationFailure } from './preflight-failure.ts';
 import { RPC } from './rpc-health.ts';
+import { validateMarketSnapshot, type MarketBookSnapshot } from './market-integrity.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
@@ -27,7 +28,7 @@ export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'P
   executionMode?: 'POST_ONLY';
   observedAt: string; sampledBlock: string; expiresAt: string; markPriceRaw: string;
   rpcUrl?: string;
-  bookTops?: { blockNumber: string; bestBidRaw: string; bestAskRaw: string };
+  bookTops?: MarketBookSnapshot;
   positionSizeBeforeRaw: string;
   transaction: { from: string; to: string; data: Hex; value: '0' } | null;
   risk: { maxNotionalWei: string; orderNotionalWei: string; gasLimit: string;
@@ -63,14 +64,15 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
   const gasCost = gasLimit * gasPrice;
   const postOnly = input.executionMode === 'POST_ONLY';
   const top = observation.bookTops;
-  const bookFresh = !!top && top.blockNumber === observation.sampledBlock &&
-    top.bestBidRaw !== 'UNKNOWN' && top.bestAskRaw !== 'UNKNOWN';
+  const integrity = validateMarketSnapshot(top, { market: observation.market,
+    pool: observation.pool, sampledBlock: observation.sampledBlock,
+    markPriceRaw: observation.markPriceRaw, now });
   let nonMarketable = false;
-  try { nonMarketable = bookFresh && (input.side === 'BUY' ?
+  try { nonMarketable = integrity.status === 'TRUSTED' && (input.side === 'BUY' ?
     parseUnits(input.price, 18) < BigInt(top!.bestAskRaw) :
     parseUnits(input.price, 18) > BigInt(top!.bestBidRaw)); } catch { /* Fail closed. */ }
   const checks = { chain: observation.chainId === 50383 && unsigned?.chainId === 50383,
-    market: observation.market === 'BTC-PERP' && same(observation.pool, BTC_POOL) &&
+    market: integrity.status === 'TRUSTED' && observation.market === 'BTC-PERP' && same(observation.pool, BTC_POOL) &&
       observation.marketSupported.status === 'SUPPORTED' && /^\d+$/.test(observation.markPriceRaw) &&
       BigInt(observation.markPriceRaw) > 0n && /^-?\d+$/.test(observation.positionSizeRaw),
     permission: observation.registryMatches.status === 'SUPPORTED' && observation.permissions.place.effective.status === 'SUPPORTED',
@@ -89,6 +91,8 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
         quantity: input.quantity, expiresAt: unsigned.expiresAt, executionMode: input.executionMode }),
   };
   const blockers = [...observation.planBlockers];
+  if (integrity.status !== 'TRUSTED')
+    blockers.push(`UNTRUSTED_MARKET_SNAPSHOT: ${integrity.reasons.join(', ')}`);
   try {
     if (positionEffect(input.side, input.quantity, observation.positionSizeRaw).kind === 'REDUCE_OR_FLIP')
       blockers.push('Opposite-side PLACE could reduce or flip an existing position; CLOSE_POSITION remains blocked');

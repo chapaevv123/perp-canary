@@ -5,6 +5,7 @@ import { withSnapshotSdk } from './lifecycle.ts';
 import { RPC, readRpcHead } from './rpc-health.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { classifySimulationFailure, type SimulationFailure } from './preflight-failure.ts';
+import { BOOK_SOURCE, validateMarketSnapshot, type MarketBookSnapshot } from './market-integrity.ts';
 
 export const HISTORICAL_SENDER = '0x71f64cd5e6e05b8401d21dc34a82c5209d1b20f0';
 export const HIDEKI_PERMISSION_REGISTRY = '0x6B2FbfeD328FF5F20C0BE7D3C3437613aFFE8D3a';
@@ -28,6 +29,9 @@ const REGISTRY_ABI = parseAbi([
   'function isApprovedForPool(address pool,address owner,address operator,bytes4 selector) view returns (bool)',
 ]);
 const OWNER_ABI = parseAbi(['function isOwner(address owner) view returns (bool)']);
+const DIRECT_BOOK_ABI = parseAbi([
+  'function getBookLevels(bool isBid,uint64 numLevels) view returns ((uint256 price,uint256 quantity)[])',
+]);
 export const SELECTORS = { place: '0x80054449', cancel: '0xe37b444b', reduce: '0x364c2587' } as const;
 if (toFunctionSelector(POOL_ABI[2]!) !== SELECTORS.place) throw Error('Official placeOrderFor selector mismatch');
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -96,9 +100,33 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     const marketStatus = system ? (await sdk.client.listPerpPoolStatuses({ factory: system.perpPoolFactory }).catch(() => []))
       .find(row => row.pool.toLowerCase() === pool.toLowerCase()) : null;
     const feed = market ? await sdk.client.getPerpFeedStatus(pool).catch(() => null) : null;
-    const book = market ? await sdk.client.getBookTopsOnchain([{ id: pool, poolAddress: pool }],
-      { blockNumber: BigInt(head.blockNumber) }).catch(() => null) : null;
+    const bookBlock = BigInt(head.blockNumber);
+    const blockMeta = market ? await client.getBlock({ blockNumber: bookBlock }).catch(() => null) : null;
+    const [book, directBids, directAsks] = market ? await Promise.all([
+      sdk.client.getBookTopsOnchain([{ id: pool, poolAddress: pool }],
+        { blockNumber: bookBlock }).catch(() => null),
+      client.readContract({ address: pool, abi: DIRECT_BOOK_ABI, functionName: 'getBookLevels',
+        args: [true, 1n], blockNumber: bookBlock }).catch(() => null),
+      client.readContract({ address: pool, abi: DIRECT_BOOK_ABI, functionName: 'getBookLevels',
+        args: [false, 1n], blockNumber: bookBlock }).catch(() => null),
+    ]) : [null, null, null];
+    const postReadBlock = market ? await client.getBlock({ blockNumber: bookBlock }).catch(() => null) : null;
     const top = book?.tops[pool.toLowerCase()];
+    const bookTops: MarketBookSnapshot = { market: market ? `${market.baseSymbol}-PERP` : 'UNKNOWN',
+      pool, source: BOOK_SOURCE, rpcUrl: RPC,
+      blockNumber: book?.blockNumber?.toString() ?? 'UNKNOWN',
+      blockHash: blockMeta?.hash ?? 'UNKNOWN',
+      postReadBlockHash: postReadBlock?.hash ?? 'UNKNOWN',
+      blockTimestamp: blockMeta ? new Date(Number(blockMeta.timestamp) * 1000).toISOString() : 'UNKNOWN',
+      observedAt: new Date().toISOString(), quoteDecimals: market?.quoteDecimals,
+      tickSizeRaw: market?.tickSize.toString() ?? 'UNKNOWN',
+      bestBidRaw: top?.bestBid?.toString() ?? 'UNKNOWN',
+      bestAskRaw: top?.bestAsk?.toString() ?? 'UNKNOWN',
+      directBestBidRaw: directBids?.[0]?.price.toString() ?? 'UNKNOWN',
+      directBestAskRaw: directAsks?.[0]?.price.toString() ?? 'UNKNOWN' };
+    const marketIntegrity = validateMarketSnapshot(bookTops, {
+      market: market ? `${market.baseSymbol}-PERP` : 'UNKNOWN', pool, sampledBlock: head.blockNumber,
+      markPriceRaw: feed?.markPrice?.toString() ?? 'UNKNOWN' });
     const marketSupported = !market ? false : !system || !marketStatus || !feed ? null :
       marketStatus.registered === true && marketStatus.tradeable === true && feed.markPriceOk === true &&
       system.fullyWired === true && market.quoteToken.toLowerCase() === system.collateralToken.toLowerCase();
@@ -123,6 +151,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     const position = market ? await sdk.client.getPerpPosition({ marginBank: market.marginBank,
       account: owner, pool }).catch(() => null) : null;
     const planBlockers: string[] = [];
+    if (input.price && marketIntegrity.status !== 'TRUSTED')
+      planBlockers.push(`UNTRUSTED_MARKET_SNAPSHOT: ${marketIntegrity.reasons.join(', ')}`);
     let unsigned: { chainId: number; from: string; to: string; data: Hex; value: string; expiresAt: string } | null = null;
     let simulation: boolean | null = null;
     let requiredGasWei: bigint | null = null;
@@ -198,9 +228,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       marginBankUnlocked: margin && market ? formatUnits(margin.unlockedCollateralBalance, market.quoteDecimals) : 'UNKNOWN',
       operatorGasStt: operatorGas === null ? 'UNKNOWN' : formatUnits(operatorGas, 18),
       markPriceRaw: feed?.markPrice?.toString() ?? 'UNKNOWN',
-      bookTops: { blockNumber: book?.blockNumber?.toString() ?? 'UNKNOWN',
-        bestBidRaw: top?.bestBid?.toString() ?? 'UNKNOWN',
-        bestAskRaw: top?.bestAsk?.toString() ?? 'UNKNOWN' },
+      bookTops, marketIntegrity,
       estimatedGasUnits: estimatedGasUnits?.toString() ?? 'UNKNOWN',
       gasPriceWei: observedGasPriceWei?.toString() ?? 'UNKNOWN',
       requiredGasWei: requiredGasWei?.toString() ?? 'UNKNOWN',

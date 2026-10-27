@@ -3,12 +3,15 @@ import test from 'node:test';
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, parseUnits } from 'viem';
 import { orderBookEventsAbi } from '@somnia-chain/markets-sdk';
 import { buildPreparedPlan, PLACE_ABI, verifyPreparedPlan } from '../src/delegated-plan.ts';
-import { assessExecutionPreflight } from '../src/delegated-execution.ts';
+import { assessExecutionPreflight, checkDelegatedPlan, executeDelegatedPlan,
+  type ExecutionPorts } from '../src/delegated-execution.ts';
 import { buildCanaryProof, classifyCanaryEvents, validateCanaryProof, verifyCanaryProof,
   type ProofSnapshot } from '../src/canary-proof.ts';
 import { decodeExecutionError } from '../src/execution-error-decoder.ts';
 import { BTC_POOL, HIDEKI_MARGIN_BANK, OWNER_TRADING_WALLET, type RawLog } from '../src/trade-forensics.ts';
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
+import { BOOK_SOURCE } from '../src/market-integrity.ts';
+import { RPC } from '../src/rpc-health.ts';
 
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
 const input = { side: 'BUY' as const, price: '79990', quantity: '0.00013', executionMode: 'POST_ONLY' as const };
@@ -25,8 +28,15 @@ function fixture(changes: Record<string, unknown> = {}) {
     permissions: { place: { effective: { status: 'SUPPORTED' } } }, marginSufficient: true,
     marginBankUnlocked: '1000', operatorGasStt: '5', markPriceRaw: parseUnits('80000', 18).toString(),
     positionSizeRaw: '5416000', estimatedGasUnits: '2000000', gasPriceWei: '6000000000',
-    bookTops: { blockNumber: '123', bestBidRaw: parseUnits('79980', 18).toString(),
-      bestAskRaw: parseUnits('80010', 18).toString() },
+    bookTops: { market: 'BTC-PERP', pool: BTC_POOL, source: BOOK_SOURCE, rpcUrl: RPC,
+      blockNumber: '123', blockHash: `0x${'ab'.repeat(32)}`,
+      postReadBlockHash: `0x${'ab'.repeat(32)}`,
+      blockTimestamp: observedAt, observedAt, quoteDecimals: 18,
+      tickSizeRaw: parseUnits('0.1', 18).toString(),
+      bestBidRaw: parseUnits('79980', 18).toString(),
+      bestAskRaw: parseUnits('80010', 18).toString(),
+      directBestBidRaw: parseUnits('79980', 18).toString(),
+      directBestAskRaw: parseUnits('80010', 18).toString() },
     planBlockers: [], simulation: { status: 'SUPPORTED' },
     unsigned: { chainId: 50383, from: BOT, to: BTC_POOL, value: '0', data, expiresAt },
     ...changes } as unknown as Awaited<ReturnType<typeof inspectTradingAuthorization>>;
@@ -84,6 +94,35 @@ test('PostOnly recheck blocks crossing, stale book, expiry and nonce conflict', 
     bestBidRaw: parseUnits('79980', 18).toString(), bestAskRaw: parseUnits('80010', 18).toString() } }), base).passed, false);
   assert.equal(assessExecutionPreflight(p, fixture(), { ...base, pendingNonce: 1 }).passed, false);
   assert.equal(assessExecutionPreflight(p, fixture(), { ...base, now: Date.parse(p.expiresAt) }).passed, false);
+});
+
+test('changed book between preparation, check and execution blocks before sign or send', async () => {
+  const p = plan();
+  const raw = (value: string) => parseUnits(value, 18).toString();
+  const crossed = fixture({ bookTops: { ...fixture().bookTops,
+    bestBidRaw: raw('80020'), bestAskRaw: raw('80010'),
+    directBestBidRaw: raw('80020'), directBestAskRaw: raw('80010') } });
+  const readOnly = { fresh: async () => crossed, chainId: async () => 50383,
+    nonce: async () => 0, gasPrice: async () => 6_000_000_000n,
+    gasBalance: async () => parseUnits('5', 18), estimateOriginal: async () => 2_000_000n };
+  await assert.rejects(checkDelegatedPlan(p, readOnly), /Read-only execution check failed at PREFLIGHT/);
+  let reads = 0;
+  let signed = 0;
+  let sent = 0;
+  const ports: ExecutionPorts = { ...readOnly,
+    fresh: async () => ++reads === 1 ? fixture() : crossed,
+    confirm: async () => true,
+    sign: async () => { signed++; throw Error('must not sign'); },
+    verifySigned: async () => false,
+    broadcastOnce: async () => { sent++; throw Error('must not send'); },
+    receiptAndForensics: async () => null };
+  await assert.rejects(executeDelegatedPlan(p, ports,
+    { ledger: 'not-used-ledger', forensics: 'not-used-forensics' }), error =>
+    error instanceof Error && 'original' in error &&
+    (error.original as Error).message.includes('CROSSED_BOOK'));
+  assert.equal(reads, 2);
+  assert.equal(signed, 0);
+  assert.equal(sent, 0);
 });
 
 test('proof hash detects tampering and PREPARED does not claim independent execution', async () => {

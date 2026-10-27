@@ -10,6 +10,7 @@ export type ExecutionReason = 'IOC_NO_FILL' | 'INSUFFICIENT_MARGIN' | 'PERMISSIO
   'WRONG_CHAIN' | 'INVALID_ORDER' | 'INVALID_QUANTITY' | 'PRICE_OUT_OF_BOUNDS' |
   'INSUFFICIENT_COLLATERAL' | 'MAX_POSITION_SIZE' | 'MARKET_BLOCKED' |
   'POST_ONLY_WOULD_CROSS' | 'STALE_MARKET' |
+  'UNTRUSTED_MARKET_SNAPSHOT' |
   'NONCE_CONFLICT' | 'PLAN_EXPIRED' | 'UNKNOWN_REVERT' | 'RPC_FAILURE' |
   'SDK_FAILURE' | 'LOCAL_FAILURE' | 'BROADCAST_UNKNOWN';
 export type DecodedExecutionError = { stage: ExecutionStage; errorClass: ErrorClass;
@@ -50,6 +51,7 @@ const actions: Partial<Record<ExecutionReason, string>> = {
   MARKET_BLOCKED: 'Check the official market and voucher allowlist; do not bypass the blocked market.',
   POST_ONLY_WOULD_CROSS: 'Refresh the book and manually choose a non-marketable price in a new plan.',
   STALE_MARKET: 'Wait for a fresh supported mark and book, then create a new plan.',
+  UNTRUSTED_MARKET_SNAPSHOT: 'Discard this plan, inspect raw book metadata, and repeat independent read-only market checks.',
   PERMISSION_DENIED: 'Verify the bot grant for this owner and BTC-PERP before creating a fresh plan.',
   WRONG_CHAIN: 'Connect to Hideki 50383 and recheck; never send on another chain.',
   NONCE_CONFLICT: 'Inspect pending bot transactions and reconcile before preparing a new independent intent.',
@@ -99,6 +101,8 @@ export function decodeExecutionError(error: unknown, stage: ExecutionStage,
   if (transactionSent === 'UNKNOWN' || stage === 'BROADCAST') {
     errorClass = 'EXECUTION_UNCERTAINTY';
     reason = 'BROADCAST_UNKNOWN';
+  } else if (!selector && /UNTRUSTED_MARKET_SNAPSHOT/.test(extracted.message)) {
+    errorClass = 'LOCAL_VALIDATION'; reason = 'UNTRUSTED_MARKET_SNAPSHOT';
   } else if (!selector && /chain.*(mismatch|wrong)|wrong chain/.test(lower)) {
     errorClass = 'LOCAL_VALIDATION'; reason = 'WRONG_CHAIN';
   } else if (!selector && /expired|expiry/.test(lower) && stage !== 'ESTIMATE_GAS') {

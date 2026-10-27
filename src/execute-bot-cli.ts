@@ -5,7 +5,7 @@ import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { readBotKeystore, withUnlockedBotSigner } from './bot-keystore.ts';
 import { readBotPlanEvidence } from './bot-evidence.ts';
 import { positionEffect, verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
-import { assessExecutionPreflight, checkDelegatedPlan, ExecutionStageError,
+import { assessExecutionPreflight, assertExecutionMarketIntegrity, checkDelegatedPlan, ExecutionStageError,
   executeDelegatedPlan, type ExecutionPorts, type ReadOnlyExecutionPorts } from './delegated-execution.ts';
 import { decodeExecutionError } from './execution-error-decoder.ts';
 import { formatExecutionDiagnostic, saveExecutionDiagnostic } from './execution-diagnostics.ts';
@@ -196,6 +196,7 @@ async function main(): Promise<void> {
         const permission = await inspectTradingAuthorization({ tradingWallet: OWNER_TRADING_WALLET,
           operator: keystore.address, pool: BTC_POOL, side: plan.side, price: plan.price,
           quantity: plan.quantity, executionMode: plan.executionMode });
+        assertExecutionMarketIntegrity(plan, permission);
         let simulatedGas: bigint;
         try { simulatedGas = await client.estimateGas({ account: keystore.address as Address,
           to: plan.transaction!.to as Address, data: plan.transaction!.data, value: 0n }); }
@@ -203,7 +204,8 @@ async function main(): Promise<void> {
         const final = assessExecutionPreflight(plan, permission, { chainId: await client.getChainId(),
           latestNonce: latest, pendingNonce: pending, gasPrice: freshGasPrice,
           gasBalance: balance, simulatedGas, now: Date.now() });
-        if (!final.passed) throw Error(`Final pre-sign check failed: ${final.blockers.join('; ')}`);
+        if (!final.passed) throw new ExecutionStageError('PREFLIGHT',
+          Error(`Final pre-sign check failed: ${final.blockers.join('; ')}`), permission);
         return signLocally(keystore, transaction, expected);
     },
     verifySigned: verifySignedBotTransaction,
@@ -215,7 +217,8 @@ async function main(): Promise<void> {
   };
   executionEntered = true;
   const outcome = await executeDelegatedPlan(plan, ports, { ledger: ledgerDir, forensics: forensicDir });
-  console.log(JSON.stringify(outcome));
+  console.log(JSON.stringify({ ...outcome,
+    transactionSent: outcome.state === 'UNKNOWN' ? 'UNKNOWN' : outcome.txHash ? 'YES' : 'NO' }));
 }
 try { await main(); }
 catch (error) {

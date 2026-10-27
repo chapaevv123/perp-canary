@@ -92,3 +92,7 @@ The failed saved plan `0c522886fcd6410659150d3c5f7572ff1f8b187c50322120f6a383662
 ## M4.0 first PostOnly order and Canary Proof
 
 [M4.0 owner handoff](docs/m4-first-proof.md) adds an official SDK `POST_ONLY=3` delegated BUY preparation command and a versioned evidence bundle with independent read-only transaction and receipt verification. `npm.cmd run canary-prepare -- BUY <owner-selected-limit> <quantity>` creates a short-lived plan only after market, permission, margin, gas and non-marketable checks pass. `npm.cmd run canary-proof -- create <plan-hash>` exports its evidence; `npm.cmd run canary-verify -- <bundle-path>` checks plan integrity and independently compares any transaction with Hideki. A prepared plan is not a verified trade. The first live order still requires a separate owner decision through the existing local `bot-execute execute` flow.
+
+## M4.0.1 market-data integrity
+
+[M4.0.1 incident audit and recovery](docs/m4-0-1-market-integrity.md) documents the reported crossed BTC-PERP book and the new fail-closed checks. The system now requires a fresh, two-sided, uncrossed, tick-aligned book with matching pinned SDK and direct RPC reads before preparing or rechecking IOC and PostOnly PLACE. `node --experimental-strip-types scripts/m401-market-check.ts` is read-only and reports raw prices, provenance and integrity status. A crossed or unproven book blocks the local execution path before estimate, signing or broadcast.
