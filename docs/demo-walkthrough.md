@@ -1,10 +1,10 @@
 # Demo walkthrough
 
-1. Run `npm.cmd run serve` and open `http://127.0.0.1:8787` on the same machine.
-2. Show the live BTC-PERP mark, best bid/ask, spread, freshness, and block. Refresh once; the line chart adds only sampled quotes observed since page open. If RPC is unavailable, explain the `UNKNOWN` state.
-3. Show the owner wallet position from the fresh SDK read, open orders, and first-order timeline. Explain `NOT_OPEN_AT_READ` and `UNKNOWN` cause.
-4. Show the receipt, order ID, proof hash, transaction hash, and matching `OrderPlaced` / `OrderRested` events. Copy the hashes; optionally run `npm.cmd run canary-status -- c48415ec3cc8cba6392294529f650c4be7a925b66f5f4b03f33eb6ad9cd52ed2` for an independent read-only status.
-5. Show the risk panel. `NOT_RUN` means a gate has not been exercised for a specific order. The browser trade controls do not place an order.
-6. For a *separate owner-approved live demonstration*, the owner may run `npm.cmd run canary-first-proof` in their own terminal. The command prints the full plan hash and expiry. The owner decides whether to run the separate execution command and exact confirmation. Do not submit an order for a recorded or automated demo without explicit owner action.
+1. Run `npm.cmd run serve` and open `http://127.0.0.1:8787`. Select BTC-PERP, then another market from the dynamically discovered SDK/factory list. Show the selected pool, live mark, pinned book, on-chain grid and block. If the source is unavailable or stale, show the explicit UNKNOWN state.
+2. Show Canary Market Radar. Spread, visible top-five depth share and mark movement come from trusted snapshots; watch alerts are in-tab only. Enter capital, risk percentage, limit entry and stop reference to demonstrate Smart Position Sizing. The stop is not installed, and the calculation excludes fees, funding, slippage and liquidation.
+3. Connect a user EIP-1193 wallet on Hideki 50383. Show that account's actual STT, USDso, allowance, MarginBank collateral, position and open orders. Review a small noncrossing BUY or SELL PostOnly limit. Canary Trade Guard checks market freshness, tick/lot, notional, mark deviation, SDK placeable size, gas and contract simulation. Stop at wallet confirmation unless the owner separately approves a live user transaction.
+4. Show separate exact-amount approval, margin deposit/withdraw and open-order cancellation reviews. These are prepared and simulated, but no user-wallet on-chain success is yet proven. The local journal distinguishes a submitted hash, receipt confirmation and later open-order observation. An absent order alone does not prove a fill.
+5. Show the verified historical owner-bot BTC order: successful receipt in block 34465778, `OrderPlaced`, `OrderRested`, order ID `14978756187852164026332`, and proof hash. Its current order state is `NOT_OPEN_AT_READ`; the disappearance cause remains `UNKNOWN`.
+6. Close with limitations: no verified user-wallet trade, guaranteed reduce-only close, market/IOC order controls, complete historical PnL, background alert delivery or model-backed AI Copilot. This is a local testnet demonstration, not a published trading service.
 
-The first order is already proven. A bounty demo can be entirely read-only; no new transaction is required to demonstrate the product.
+Owner-approved transaction checkpoint: **READY_FOR_OWNER_CONFIRMATION** after a real user wallet has funds and a fresh guarded review passes. Each state-changing transaction has its own wallet confirmation. No transaction is performed by this walkthrough.

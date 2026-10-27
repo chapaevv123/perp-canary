@@ -24,8 +24,12 @@ import { buildOrderActionPlan, discoverBtcOrders, inspectOrderAction } from './o
 import { readOrderActionForensics } from './order-action-forensics.ts';
 import { assessCanary, assessPlanCanary, type CanarySignal } from './canary-safety.ts';
 import { localRequestRejection } from './server-security.ts';
-import { publicProof, readFirstOrderHistory, readFirstProof, readTerminalMarket } from './terminal-data.ts';
-import { prepareDirectTrade, readDirectAccount, readDirectReceipt, type DirectInput } from './browser-trade.ts';
+import { publicProof, readFirstOrderAccount, readFirstOrderHistory, readFirstProof,
+  readTerminalMarket } from './terminal-data.ts';
+import { prepareDirectTrade, prepareWalletAction, readDirectAccount, readDirectReceipt,
+  readWalletActionReceipt, type DirectInput, type WalletActionInput } from './browser-trade.ts';
+import { listVerifiedMarkets, readVerifiedMarket, verifiedMarket } from './market-registry.ts';
+import { assessMarketRadar, calculatePositionSize, type RadarInput } from './canary-intelligence.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -46,6 +50,7 @@ const botExecutionLedgerDir = resolve('bot-execution-ledger');
 const botForensicDir = resolve('bot-execution-forensics');
 const orderActionForensicDir = resolve('bot-order-action-forensics');
 let refreshing = false;
+const previousRadar = new Map<string, RadarInput>();
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
 
@@ -79,8 +84,31 @@ createServer(async (request, response) => {
       json(response, 200, publicProof(await readFirstProof()));
     } else if (request.method === 'GET' && path === '/api/v1/terminal/market') {
       json(response, 200, await readTerminalMarket());
+    } else if (request.method === 'GET' && path === '/api/v1/markets') {
+      json(response, 200, { observedAt: new Date().toISOString(), markets: await listVerifiedMarkets() });
+    } else if (request.method === 'GET' && path === '/api/v1/markets/snapshot') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const snapshot = await readVerifiedMarket(params.get('market') ?? '');
+      const radarInput: RadarInput = { status: snapshot.book.status, mark: snapshot.mark,
+        bid: snapshot.book.bid, ask: snapshot.book.ask, observedAt: snapshot.observedAt,
+        bidLevels: snapshot.depth.bids, askLevels: snapshot.depth.asks };
+      const prior = previousRadar.get(snapshot.market.id);
+      const radar = assessMarketRadar(radarInput, prior);
+      if (snapshot.book.status === 'TRUSTED') previousRadar.set(snapshot.market.id, radarInput);
+      json(response, 200, { ...snapshot, market: snapshot.market.symbol,
+        marketMeta: snapshot.market, radar });
+    } else if (request.method === 'POST' && path === '/api/v1/intelligence/size') {
+      const body = await jsonBody(request);
+      const market = await verifiedMarket(String(body.market ?? ''));
+      json(response, 200, calculatePositionSize({ capital: String(body.capital ?? ''),
+        riskPercent: String(body.riskPercent ?? ''), entry: String(body.entry ?? ''),
+        stop: String(body.stop ?? ''), side: body.side as 'BUY' | 'SELL', baseDecimals: market.baseDecimals,
+        quoteDecimals: market.quoteDecimals, lotSizeRaw: market.lotSizeRaw,
+        minQuantityRaw: market.minQuantityRaw, initialMarginBps: market.initialMarginBps }));
     } else if (request.method === 'GET' && path === '/api/v1/terminal/history') {
       json(response, 200, await readFirstOrderHistory());
+    } else if (request.method === 'GET' && path === '/api/v1/terminal/account') {
+      json(response, 200, await readFirstOrderAccount());
     } else if (request.method === 'GET' && path === '/api/v1/terminal/plan') {
       const records = await readBotPlanEvidence(botEvidenceDir);
       const active = records.map(row => row.plan).filter((plan): plan is PreparedPlan =>
@@ -90,15 +118,28 @@ createServer(async (request, response) => {
         quantity: active.quantity, expiresAt: active.expiresAt, status: 'PREPARED_RECHECK_REQUIRED' } : null);
     } else if (request.method === 'GET' && path === '/api/v1/trade/account') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
-      json(response, 200, await readDirectAccount(params.get('account') ?? ''));
+      json(response, 200, await readDirectAccount(params.get('account') ?? '', params.get('market') ?? undefined));
     } else if (request.method === 'POST' && path === '/api/v1/trade/prepare') {
       const body = await jsonBody(request);
       if (body.orderType !== 'POST_ONLY' || !['BUY', 'SELL'].includes(String(body.side)))
-        throw Error('Only BTC-PERP BUY/SELL PostOnly is supported');
+        throw Error('Only BUY/SELL PostOnly is supported');
       json(response, 200, await prepareDirectTrade(body as DirectInput));
     } else if (request.method === 'GET' && path === '/api/v1/trade/receipt') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
-      json(response, 200, await readDirectReceipt(params.get('hash') ?? '', params.get('account') ?? ''));
+      json(response, 200, await readDirectReceipt(params.get('hash') ?? '', params.get('account') ?? '',
+        params.get('market') ?? undefined));
+    } else if (request.method === 'POST' && path === '/api/v1/trade/action/prepare') {
+      const body = await jsonBody(request);
+      if (!['APPROVE', 'DEPOSIT', 'WITHDRAW', 'CANCEL'].includes(String(body.action)))
+        throw Error('Unsupported wallet action');
+      json(response, 200, await prepareWalletAction(body as WalletActionInput));
+    } else if (request.method === 'GET' && path === '/api/v1/trade/action/receipt') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const action = params.get('action');
+      if (!['APPROVE', 'DEPOSIT', 'WITHDRAW', 'CANCEL'].includes(String(action))) throw Error('Unsupported action');
+      json(response, 200, await readWalletActionReceipt(params.get('hash') ?? '', params.get('account') ?? '',
+        params.get('market') ?? '', action as WalletActionInput['action'], params.get('orderId') ?? undefined,
+        params.get('amount') ?? undefined));
     } else if (request.method === 'GET' && path === '/terminal.css') {
       response.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(terminalCssPath));

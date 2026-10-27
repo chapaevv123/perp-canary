@@ -21,7 +21,14 @@ const fillTopic = eventTopic('OrderFilled');
 const client = createPublicClient({ chain: hidekiTestnet, transport: http(RPC, { timeout: 15_000, retryCount: 0 }) });
 const depthAbi = parseAbi(['function getBookLevels(bool isBid,uint64 numLevels) view returns ((uint256 price,uint256 quantity)[])']);
 let scannedThrough = FIRST_BLOCK;
-let scannedEvents: LifecycleEvent[] = [];
+const scannedEvents: LifecycleEvent[] = [];
+let ownerDiscoveryInFlight: ReturnType<typeof discoverBtcOrders> | null = null;
+function discoverOwnerOnce() {
+  if (!ownerDiscoveryInFlight) ownerDiscoveryInFlight = discoverBtcOrders().finally(() => {
+    ownerDiscoveryInFlight = null;
+  });
+  return ownerDiscoveryInFlight;
+}
 
 export function publicProof(bundle: CanaryProofBundle) {
   validateCanaryProof(bundle);
@@ -109,6 +116,17 @@ export function classifyLifecycle(events: LifecycleEvent[], open: boolean | null
     filledRaw: filledRaw.toString() };
 }
 
+export async function readFirstOrderAccount() {
+  const discovery = await discoverOwnerOnce();
+  if (discovery.chainId !== 50383) throw Error('Owner account RPC chain mismatch');
+  return { readBlock: discovery.block,
+    position: { sizeBtc: formatUnits(BigInt(discovery.position.sizeRaw), 8),
+      entryPrice: formatUnits(BigInt(discovery.position.entryPriceRaw), 18), block: discovery.block },
+    openOrders: discovery.orders.map(row => ({ id: row.id, side: row.side,
+      price: formatUnits(BigInt(row.priceRaw), 18), remaining: formatUnits(BigInt(row.remainingRaw), 8),
+      expiryNs: row.expiryNs })) };
+}
+
 export async function readFirstOrderHistory() {
   const bundle = await readFirstProof();
   const proof = publicProof(bundle);
@@ -117,8 +135,7 @@ export async function readFirstOrderHistory() {
     String(e.args.orderId) === FIRST_ORDER_ID);
   const chainId = await client.getChainId();
   if (chainId !== 50383) throw Error(`Wrong chain ID ${chainId}`);
-  const discovery = await discoverBtcOrders();
-  const head = await client.getBlockNumber();
+  const [discovery, head] = await Promise.all([discoverOwnerOnce(), client.getBlockNumber()]);
   const events: LifecycleEvent[] = firstEvents.map(e => ({ name: e.eventName, block: proof.block,
     txHash: proof.txHash!, logIndex: e.logIndex,
     quantityRaw: e.eventName === 'OrderPlaced' ?
@@ -129,7 +146,7 @@ export async function readFirstOrderHistory() {
     client.request({ method: 'eth_getLogs', params: [{ address: BTC_POOL as Hex,
       fromBlock: toHex(from), toBlock: toHex(to), topics }] });
   // eth_getLogs providers commonly limit ranges. Query indexed topics and keep every range complete.
-  for (let from = scannedThrough + 1n; from <= head; from += 1000n) {
+  const scanChunk = async (from: bigint) => {
     const to = from + 999n > head ? head : from + 999n;
     const [ordinary, taker, maker] = await Promise.all([
       getIndexedLogs(from, to, [indexedTopics, orderTopic]),
@@ -141,13 +158,23 @@ export async function readFirstOrderHistory() {
       if (!log.blockNumber || !log.transactionHash || !log.logIndex) throw Error('Incomplete indexed order log');
       const decoded = decodeEventLog({ abi: orderBookEventsAbi, topics: log.topics, data: log.data });
       const args = decoded.args as Record<string, unknown>;
-      chunkEvents.push({ name: decoded.eventName, block: BigInt(log.blockNumber!).toString(),
+      chunkEvents.push({ name: decoded.eventName, block: BigInt(log.blockNumber).toString(),
         txHash: log.transactionHash, logIndex: Number(BigInt(log.logIndex)),
         quantityRaw: decoded.eventName === 'OrderFilled' ? String(args.quantityFilled) : null,
         source: 'HIDEKI_RPC' });
     }
-    scannedEvents = [...scannedEvents, ...chunkEvents];
-    scannedThrough = to;
+    return { to, chunkEvents };
+  };
+  // The first historic scan covers thousands of blocks. Four bounded concurrent ranges
+  // keep the proof panel responsive while retaining complete, ordered checkpoints.
+  for (let from = scannedThrough + 1n; from <= head; from += 4000n) {
+    const starts = Array.from({ length: 4 }, (_, index) => from + BigInt(index) * 1000n)
+      .filter(start => start <= head);
+    const chunks = await Promise.all(starts.map(scanChunk));
+    for (const chunk of chunks) {
+      scannedEvents.push(...chunk.chunkEvents);
+      scannedThrough = chunk.to;
+    }
   }
   events.push(...scannedEvents);
   const unique = [...new Map(events.map(e => [`${e.txHash}:${e.logIndex}`, e])).values()]

@@ -4,8 +4,12 @@
   const set = (id, value) => { $(id).textContent = value == null || value === '' ? '—' : String(value); };
   const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null, side: 'BUY',
     observations: [], started: new Date(), marketBusy: false, historyBusy: false };
-  const money = value => value == null || !Number.isFinite(Number(value)) ? '—' :
-    Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = value => {
+    const number = Number(value);
+    if (value == null || !Number.isFinite(number)) return '—';
+    const places = number >= 1 ? 2 : number >= .01 ? 4 : 8;
+    return number.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places });
+  };
   function decimalRaw(value, decimals) {
     if (typeof value !== 'string' || !/^\d{1,24}(?:\.\d+)?$/.test(value)) throw Error('Enter a positive decimal number.');
     const [whole, fraction = ''] = value.split('.');
@@ -55,7 +59,7 @@
     set('chart-x-start', new Date(points[0].time).toLocaleTimeString());
     set('chart-x-end', new Date(last.time).toLocaleTimeString());
     set('chart-last', `LATEST ${money(last.price)} USDso · block ${last.block}`);
-    $('chart').setAttribute('aria-label', `${points.length} real observed BTC-PERP mark quotes since ${state.started.toLocaleTimeString()}; latest ${money(last.price)} USDso`);
+    $('chart').setAttribute('aria-label', `${points.length} real observed ${$('market-select').value} mark quotes since ${state.started.toLocaleTimeString()}; latest ${money(last.price)} USDso`);
   }
   function updateRisk() {
     const m = state.market;
@@ -102,22 +106,21 @@
     let price, quantity;
     try { price = decimalRaw(priceText, 18); }
     catch (error) { $('limit-price').setAttribute('aria-invalid', 'true'); set('trade-error', `Limit price: ${error.message}`); return; }
-    try { quantity = decimalRaw(quantityText, 8); }
+    try { quantity = decimalRaw(quantityText, m?.grid?.baseDecimals ?? 8); }
     catch (error) { $('quantity').setAttribute('aria-invalid', 'true'); set('trade-error', `Quantity: ${error.message}`); return; }
     if (price <= 0n || quantity <= 0n) { set('trade-error', 'Price and quantity must be greater than zero.'); return; }
-    const notional = price * quantity / 100000000n;
+    const notional = price * quantity / 10n ** BigInt(m?.grid?.baseDecimals ?? 8);
     set('notional', `${money(rawDecimal(notional, 18))} USDso`);
-    if (!trustedBook() || m?.chainId !== 50383 || m?.market !== 'BTC-PERP' || m?.risk?.market !== 'SUPPORTED') {
-      set('trade-error', 'A fresh TRUSTED BTC-PERP quote is required. Refresh the market.'); return;
+    if (!trustedBook() || m?.chainId !== 50383 || m?.market !== $('market-select').value || m?.risk?.market !== 'SUPPORTED') {
+      set('trade-error', 'A fresh TRUSTED quote for the selected market is required. Refresh the market.'); return;
     }
-    if (m.bot.placeGrant !== 'SUPPORTED') { set('trade-error', 'Bot PLACE grant is not confirmed.'); return; }
     try {
       const tick = BigInt(m.grid.tickSizeRaw), lot = BigInt(m.grid.lotSizeRaw);
       const min = BigInt(m.grid.minQuantityRaw), ask = decimalRaw(m.book.ask, 18);
       const mark = decimalRaw(m.mark, 18);
       if (tick <= 0n || price % tick !== 0n) throw Error('Limit price must be on the market tick grid.');
       if (lot <= 0n || quantity < min || quantity % lot !== 0n)
-        throw Error(`Quantity must be at least ${rawDecimal(min, 8)} BTC and on the lot grid.`);
+        throw Error(`Quantity must be at least ${rawDecimal(min, m.grid.baseDecimals ?? 8)} ${m.marketMeta?.base ?? 'BTC'} and on the lot grid.`);
       if (state.side === 'BUY' ? price >= ask : price <= decimalRaw(m.book.bid, 18))
         throw Error(`${state.side} PostOnly would cross the opposite book top.`);
       const deviation = price > mark ? price - mark : mark - price;
@@ -125,11 +128,12 @@
       if (notional > 100n * 10n ** 18n) throw Error('Notional exceeds the 100 USDso limit.');
       if (notional <= 0n) throw Error('Notional must be positive.');
     } catch (error) { set('trade-error', error.message); return; }
-    const normalizedPrice = rawDecimal(price, 18), normalizedQuantity = rawDecimal(quantity, 8);
-    state.tradeCommand = state.side === 'BUY' ? `npm.cmd run canary-prepare -- BUY ${normalizedPrice} ${normalizedQuantity}` : null;
-    set('prepare-command', state.tradeCommand ?? 'Owner CLI currently supports BUY only. Use the connected wallet review for SELL.');
+    const normalizedPrice = rawDecimal(price, 18), normalizedQuantity = rawDecimal(quantity, m.grid.baseDecimals ?? 8);
+    state.tradeCommand = state.side === 'BUY' && m.market === 'BTC-PERP' && m.bot.placeGrant === 'SUPPORTED' ?
+      `npm.cmd run canary-prepare -- BUY ${normalizedPrice} ${normalizedQuantity}` : null;
+    set('prepare-command', state.tradeCommand ?? 'Owner CLI supports BTC BUY only. Use the connected wallet review for this market.');
     $('trade-error').className = 'trade-error okay';
-    set('trade-error', 'Preview only. CLI will repeat all risk checks before a plan can be prepared.');
+    set('trade-error', 'Input preview only. Wallet review runs fresh Canary Trade Guard checks.');
     $('copy-prepare').disabled = !state.tradeCommand;
   }
   function updateBookFreshness() {
@@ -150,8 +154,13 @@
     state.market = m;
     const fresh = trustedBook();
     set('rpc-pill', `RPC · LIVE #${m.block}`); $('rpc-pill').className = 'pill good';
-    set('bot-pill', `BOT · ${m.bot.placeGrant === 'SUPPORTED' ? 'GRANTED' : m.bot.placeGrant}`);
-    $('bot-pill').className = `pill ${m.bot.placeGrant === 'SUPPORTED' ? 'good' : 'bad'}`;
+    set('bot-pill', m.market === 'BTC-PERP' ?
+      `BOT · ${m.bot.placeGrant === 'SUPPORTED' ? 'GRANTED' : m.bot.placeGrant}` : 'BOT · OWNER BTC ONLY');
+    $('bot-pill').className = `pill ${m.bot.placeGrant === 'SUPPORTED' ? 'good' : 'muted'}`;
+    document.querySelector('.chart-panel h2').textContent = `${m.market} price trace`;
+    document.querySelector('.book-labels span:last-child').textContent = `QTY (${m.marketMeta?.base ?? 'BTC'})`;
+    document.querySelector('.summary-grid .metric span').textContent = `USDso / ${m.marketMeta?.base ?? 'BTC'}`;
+    document.querySelector('.trade-panel .field span').textContent = m.marketMeta?.base ?? 'BTC';
     set('mark', m.mark == null ? '—' : money(m.mark));
     set('best-bid', fresh ? money(m.book.bid) : '—'); set('best-ask', fresh ? money(m.book.ask) : '—');
     const spread = fresh && m.book.bid && m.book.ask ? Number(m.book.ask) - Number(m.book.bid) : null;
@@ -177,7 +186,7 @@
     $('use-bid').disabled = !fresh || state.side !== 'BUY'; $('use-ask').disabled = !fresh || state.side !== 'SELL';
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = !fresh; });
     const markTime = Date.parse(m.observedAt);
-    const credibleMark = fresh && m.chainId === 50383 && m.market === 'BTC-PERP' &&
+    const credibleMark = fresh && m.chainId === 50383 && m.market === $('market-select').value &&
       m.mark != null && Number.isFinite(Number(m.mark)) && Number(m.mark) > 0 &&
       Number.isFinite(markTime) && Date.now() >= markTime && Date.now() - markTime <= 30000;
     if (credibleMark && state.observations.at(-1)?.block !== m.block) {
@@ -195,11 +204,9 @@
     const li = document.createElement('li'), strong = document.createElement('strong'), span = document.createElement('span');
     strong.textContent = name; span.textContent = detail; li.append(strong, span); return li;
   }
-  function renderHistory(h) {
-    state.history = h;
+  function renderOwnerAccount(h) {
     set('position-size', h.position.sizeBtc); set('entry-price', money(h.position.entryPrice));
     set('position-block', `BLOCK ${h.position.block}`); set('open-count', h.openOrders.length);
-    set('order-state', h.lifecycle.state); set('order-cause', h.lifecycle.cause);
     const body = $('orders-body'); body.replaceChildren();
     if (!h.openOrders.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 5; td.textContent = `No open BTC-PERP orders at block ${h.readBlock}`; tr.append(td); body.append(tr); }
     for (const row of h.openOrders) {
@@ -209,6 +216,11 @@
         const td = document.createElement('td'); td.textContent = value; td.dataset.label = labels[index]; tr.append(td);
       } body.append(tr);
     }
+  }
+  function renderHistory(h) {
+    state.history = h;
+    renderOwnerAccount(h);
+    set('order-state', h.lifecycle.state); set('order-cause', h.lifecycle.cause);
     const items = h.events.map(e => timelineItem(e.name, `Block ${e.block} · tx ${e.txHash.slice(0, 12)}… · ${e.source}${e.quantityRaw ? ` · ${Number(e.quantityRaw) / 1e8} BTC` : ''}`));
     items.push(timelineItem(h.lifecycle.state, `Open-order and position read at block ${h.readBlock}; events scanned through ${h.scanThroughBlock}. Cause: ${h.lifecycle.cause}.`));
     $('timeline').replaceChildren(...items);
@@ -243,7 +255,9 @@
   async function loadMarket() {
     if (state.marketBusy) return; state.marketBusy = true; $('refresh').disabled = true;
     set('refresh', 'Refreshing live data...');
-    try { renderMarket(await read('/api/v1/terminal/market')); }
+    const selected = $('market-select').value;
+    try { const market = await read(`/api/v1/markets/snapshot?market=${encodeURIComponent(selected)}`);
+      if ($('market-select').value === selected) renderMarket(market); }
     catch (error) { set('rpc-pill', 'RPC · UNKNOWN'); $('rpc-pill').className = 'pill bad';
       set('bot-pill', 'BOT · UNKNOWN'); $('bot-pill').className = 'pill muted';
       state.market = null; set('mark', '—'); set('market-block', 'UNKNOWN');
@@ -251,7 +265,8 @@
       if (!state.observations.length) set('chart-empty', `Live source unavailable: ${error.message}`);
       updateBookFreshness(); updateRisk();
       window.dispatchEvent(new window.CustomEvent('canary:market', { detail: null })); }
-    finally { state.marketBusy = false; $('refresh').disabled = false; set('refresh', 'Refresh live data'); }
+    finally { state.marketBusy = false; $('refresh').disabled = false; set('refresh', 'Refresh live data');
+      if ($('market-select').value !== selected) window.setTimeout(loadMarket, 0); }
   }
   async function loadHistory() {
     if (state.historyBusy) return; state.historyBusy = true;
@@ -259,11 +274,25 @@
     try { renderHistory(await read('/api/v1/terminal/history')); }
     catch (error) { $('timeline').replaceChildren(timelineItem('UNKNOWN', `Read-only RPC history unavailable: ${error.message}`));
       set('order-state', 'UNKNOWN'); set('order-cause', 'UNKNOWN');
-      set('position-size', 'UNKNOWN'); set('entry-price', 'UNKNOWN'); set('open-count', 'UNKNOWN');
-      set('position-block', 'BLOCK UNKNOWN'); $('orders-body').replaceChildren(); }
+      if (!state.ownerAccount) {
+        set('position-size', 'UNKNOWN'); set('entry-price', 'UNKNOWN'); set('open-count', 'UNKNOWN');
+        set('position-block', 'BLOCK UNKNOWN'); $('orders-body').replaceChildren(); } }
     finally { state.historyBusy = false; }
   }
-  $('refresh').onclick = () => { loadMarket(); loadHistory(); loadPlan(); };
+  async function loadOwnerAccount() {
+    try { const account = await read('/api/v1/terminal/account');
+      state.ownerAccount = account; if (!state.history || BigInt(account.readBlock) >= BigInt(state.history.readBlock))
+        renderOwnerAccount(account);
+    } catch { if (!state.history) set('position-block', 'BLOCK UNKNOWN'); }
+  }
+  $('refresh').onclick = () => { loadMarket(); loadOwnerAccount(); loadHistory(); loadPlan(); };
+  $('market-select').addEventListener('change', () => {
+    state.market = null; state.observations = []; state.started = new Date();
+    $('chart-line').setAttribute('d', ''); $('chart-dot').hidden = true;
+    set('chart-count', '0 observed quotes'); set('chart-empty', 'Waiting for verified live observations.');
+    $('chart-empty').hidden = false; $('quantity').value = ''; $('limit-price').value = '';
+    updateBookFreshness(); loadMarket();
+  });
   function selectSide(side) {
     state.side = side;
     $('buy').classList.toggle('selected', side === 'BUY'); $('sell').classList.toggle('selected', side === 'SELL');
@@ -313,7 +342,7 @@
     set('proof-events', 'Receipt events unavailable for verification.');
     set('proof-hash', `UNKNOWN: ${error.message}`);
   });
-  loadMarket(); loadHistory(); loadPlan();
+  loadMarket(); loadOwnerAccount(); loadHistory(); loadPlan();
   window.setInterval(loadMarket, 30000); window.setInterval(loadHistory, 60000); window.setInterval(loadPlan, 10000);
   window.setInterval(() => { if (state.market) { updateBookFreshness(); updateRisk(); }
     if (state.plan && Date.now() >= Date.parse(state.plan.expiresAt)) loadPlan(); }, 5000);

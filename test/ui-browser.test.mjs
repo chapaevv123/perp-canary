@@ -80,6 +80,31 @@ async function fixturePage(initScript) {
     await route.fulfill(response?.error ? { status: 503, json: { error: response.error } } : { json: response });
   });
   await page.route('**/api/v1/terminal/history', route => route.fulfill({ json: history }));
+  await page.route('**/api/v1/terminal/account', route => route.fulfill({ json: {
+    readBlock: history.readBlock, position: history.position, openOrders: history.openOrders } }));
+  await page.route('**/api/v1/markets', route => route.fulfill({ json: { observedAt: new Date().toISOString(),
+    markets: [
+      { id: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0', symbol: 'BTC-PERP',
+        base: 'BTC', quote: 'USDso', status: 'TRADEABLE' },
+      { id: '0xd6cb1dd58580b84d76068ac21594219ce03aeddf', symbol: 'ETH-PERP',
+        base: 'ETH', quote: 'USDso', status: 'TRADEABLE' },
+    ] } }));
+  await page.route('**/api/v1/markets/snapshot?**', async route => {
+    if (new URL(route.request().url()).searchParams.get('market') === 'BTC-PERP') {
+      if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
+      await route.fulfill(response?.error ? { status: 503, json: { error: response.error } } : { json: response });
+      return;
+    }
+    const eth = market('34470001', '2346.15');
+    eth.market = 'ETH-PERP'; eth.book.bid = '2346.40'; eth.book.ask = '2346.50';
+    eth.depth.bids = [{ price: '2346.40', quantity: '1.2' }];
+    eth.depth.asks = [{ price: '2346.50', quantity: '0.8' }];
+    eth.grid = { tickSizeRaw: '10000000000000000', lotSizeRaw: '100000000000000',
+      minQuantityRaw: '4000000000000000', baseDecimals: 18, quoteDecimals: 18 };
+    eth.marketMeta = { base: 'ETH', quote: 'USDso' };
+    eth.bot.placeGrant = 'NOT_APPLICABLE';
+    route.fulfill({ json: eth });
+  });
   await page.route('**/api/v1/terminal/plan', route => route.fulfill({
     contentType: 'application/json; charset=utf-8', body: JSON.stringify(plan),
   }));
@@ -258,8 +283,9 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     maxGasCostStt: '0.001' };
   try {
     await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: { account, gasStt: '1',
-      walletUsdso: '100', marginUnlocked: '50', position: { sizeBtc: '0', entryPrice: '0' },
-      openOrders: [], block: '123' } }));
+      walletUsdso: '100', allowance: '0', marginUnlocked: '50', withdrawable: '10',
+      position: { sizeBtc: '0', entryPrice: '0' },
+      openOrders: [{ id: '789', side: 'BUY', remaining: '0.00013', price: '79806.1' }], block: '123' } }));
     await page.route('**/api/v1/trade/prepare', route => {
       prepareCalls++;
       route.fulfill({ json: { status: prepareStatus, guard: { verdict: prepareStatus === 'READY' ? 'GREEN' : 'RED',
@@ -268,6 +294,13 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     });
     await page.route('**/api/v1/trade/receipt?**', route => route.fulfill({ json: {
       state: receiptState, hash: txHash, block: '456', orderId: '789' } }));
+    await page.route('**/api/v1/trade/action/prepare', route => route.fulfill({ json: {
+      status: 'READY', action: route.request().postDataJSON().action,
+      allowance: '0', walletUsdso: '100', withdrawable: '10',
+      transaction: { ...tx, to: '0xed7993A74dAe1e6656B704A424DcD8711aAf4F72',
+        data: '0x095ea7b3' } } }));
+    await page.route('**/api/v1/trade/action/receipt?**', route => route.fulfill({ json: {
+      state: 'CONFIRMED', hash: txHash, block: '457' } }));
     assert.equal(await page.locator('#review-order').isDisabled(), true);
     await page.locator('#wallet-connect').click();
     await page.locator('#wallet-state').getByText(/Hideki 50383/).waitFor();
@@ -297,8 +330,24 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     receiptState = 'PLACED';
     await page.locator('#confirm-wallet').click();
     await page.locator('#wallet-result').getByText(/On-chain placement confirmed/).waitFor();
+    assert.match(await page.locator('#trade-review-summary').textContent(), /Order #789/);
+    assert.match(await page.locator('.wallet-journal').last().textContent(), /no model service is connected/);
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
     assert.ok(prepareCalls >= 4);
+    await page.locator('#action-amount').fill('10');
+    await page.locator('#review-action').click();
+    await page.locator('#action-review').waitFor();
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
+    await page.locator('#confirm-action').click();
+    await page.locator('#action-result').getByText(/APPROVE CONFIRMED/).waitFor();
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 3);
+    await page.locator('.wallet-order-row button').click();
+    assert.equal(await page.locator('#wallet-action').inputValue(), 'CANCEL');
+    assert.equal(await page.locator('#action-order-id').inputValue(), '789');
+    await page.locator('#review-action').click();
+    await page.locator('#action-review').waitFor();
+    await page.locator('#dismiss-action').click();
+    assert.equal(await page.evaluate(() => window.__walletMock.sends), 3);
     await page.evaluate(() => window.__walletMock.changeChain('0x1'));
     assert.equal(await page.locator('#review-order').isDisabled(), true);
     await page.locator('#wallet-switch').click();
@@ -317,6 +366,23 @@ test('real Chromium: missing injected wallet cannot review or submit', async () 
     await page.locator('#wallet-connect').click();
     assert.match(await page.locator('#wallet-result').textContent(), /No injected EIP-1193 wallet/);
     assert.equal(await page.locator('#review-order').isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: verified market switching uses ETH decimals and resets observed chart', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    assert.equal(await page.locator('#market-select option').count(), 2);
+    await page.locator('#market-select').selectOption('ETH-PERP');
+    await page.locator('.chart-panel h2').getByText('ETH-PERP price trace').waitFor();
+    assert.equal(await page.locator('#mark').textContent(), '2,346.15');
+    assert.equal(await page.locator('#chart-count').textContent(), '1 observed quote');
+    assert.match(await page.locator('.book-labels').textContent(), /QTY \(ETH\)/);
+    await page.locator('#quantity').fill('0.004');
+    await page.locator('#use-bid').click();
+    assert.match(await page.locator('#notional').textContent(), /9\.39 USDso/);
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
@@ -422,8 +488,12 @@ test('real Chromium: stale first read leaves the chart empty and preview blocked
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/api/v1/terminal/market', route => route.fulfill({ json: market('34470000', '79800', 40000) }));
+  await page.route('**/api/v1/markets/snapshot?**', route => route.fulfill({ json: market('34470000', '79800', 40000) }));
+  await page.route('**/api/v1/markets', route => route.fulfill({ json: { markets: [
+    { symbol: 'BTC-PERP', quote: 'USDso', status: 'TRADEABLE' }] } }));
   await page.route('**/api/v1/terminal/history', route => route.fulfill({ json: history }));
+  await page.route('**/api/v1/terminal/account', route => route.fulfill({ json: {
+    readBlock: history.readBlock, position: history.position, openOrders: history.openOrders } }));
   await page.route('**/api/v1/terminal/plan', route => route.fulfill({
     contentType: 'application/json; charset=utf-8', body: 'null',
   }));

@@ -10,6 +10,7 @@ function observation(): TradeObservation {
     pool: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0',
     marginBank: '0x478769E1177C0773c43A593DCCc4Ad15F15F1394',
     book: { status: 'TRUSTED', observedAt, bid: '79806.1', ask: '79806.3' }, mark: '79800',
+    depth: { status: 'VERIFIED', bids: [{ quantity: '0.001' }], asks: [{ quantity: '0.001' }] },
     grid: { tickSizeRaw: '100000000000000000', lotSizeRaw: '1000', minQuantityRaw: '13000',
       baseDecimals: 8, quoteDecimals: 18 },
     account: { address: account, gasWei: '1000000000000000000', walletUsdsoRaw: '100000000000000000000',

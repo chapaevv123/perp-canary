@@ -142,5 +142,26 @@ button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-
 .wallet-position{padding:13px 0;border-top:1px solid #3e485b;font-size:13px}
 .wallet-position>strong{font-size:14px}.wallet-position p{color:#b1bed0;overflow-wrap:anywhere}
 .wallet-order-row{padding:8px 0;border-top:1px solid #384354;overflow-wrap:anywhere}
+.wallet-order-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.wallet-order-row button{flex:0 0 auto;font-size:12px;padding:6px 9px}
+.wallet-actions{display:grid;gap:10px;border-top:1px solid #3e485b;padding:15px 0}
+.wallet-actions>strong{font-size:16px}.wallet-actions p{margin:0;color:#b1bed0;font-size:13px;line-height:1.5}
+.wallet-actions label{display:grid;gap:5px;color:#b1bed0;font-size:13px}
+.wallet-actions input,.wallet-actions select{width:100%;min-width:0;padding:10px 11px;background:#151e2b;
+  color:#edf0f7;border:1px solid #46526a;border-radius:5px;font-size:15px}
+.wallet-actions input:focus-visible,.wallet-actions select:focus-visible{outline:2px solid #9b93ff;outline-offset:2px}
+.wallet-journal{border-top:1px solid #3e485b;padding:14px 0;font-size:13px}
+.wallet-journal>strong{font-size:16px}.wallet-journal p{color:#b1bed0;line-height:1.45}
+.journal-entry{padding:8px 0;border-top:1px solid #394455;overflow-wrap:anywhere;color:#d3dce9}
+.radar-card,.sizing-card{padding:13px;margin:12px 0;border:1px solid #454f66;border-radius:6px;background:#202a37}
+.radar-card>span{font-size:12px;letter-spacing:.07em;color:#c1adff;font-weight:800}
+.radar-card>strong{display:block;margin:5px 0;font-size:17px;color:#e2cc85}
+.radar-card>strong[data-status="NORMAL"]{color:#6ae3af}
+.radar-card p,.sizing-card p{font-size:13px;line-height:1.5;color:#bdc9d8;margin:6px 0}
+.radar-card #radar-alerts p{color:#ffd397;border-top:1px solid #3d485b;padding-top:6px}
+.sizing-card>strong{font-size:16px}.sizing-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:9px 0}
+.sizing-fields label{font-size:12px;color:#b5c1d1}.sizing-fields input{width:100%;min-width:0;
+  margin-top:4px;padding:9px 7px;background:#151e2b;color:#eef2f8;border:1px solid #46526a;border-radius:5px;font-size:15px}
+@media(max-width:450px){.sizing-fields{grid-template-columns:1fr}}
 @media(max-width:1450px){.top-status{flex-wrap:wrap;justify-content:flex-end}}
 @media(max-width:550px){.top-status{justify-content:flex-start}.page-head>div{width:100%;min-width:0}.market-picker{align-items:flex-start;flex-direction:column;gap:4px;min-width:0}.market-picker select{width:100%;min-width:0;max-width:100%;font-size:18px}}

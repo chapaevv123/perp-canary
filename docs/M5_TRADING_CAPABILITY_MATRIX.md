@@ -1,5 +1,13 @@
 # M5.0 trading capability matrix
 
+## M5.1 continuation (2026-10-27)
+
+The table below records the M5.0 baseline. M5.1 adds dynamic SDK `listPerpMarkets()` plus factory status discovery. A selected market's pool `marginBank()`, `getOrderBookParameters()`, pinned top of book and direct contract levels must agree before the quote is TRUSTED. A read-only official SDK probe returned **21 factory-tradeable markets** on 2026-10-27: 1000PEPE, ADA, AVAX, BNB, BTC, DOGE, ETH, HYPE, LINK, LIT, NEAR, PUMP, SOL, SUI, TAO, VVV, WLD, XLM, XRP, ZEC and ZRO, all quoted in USDso. This is a time-specific discovery result, not proof that every market has a liquid trusted book or accepts every wallet's order.
+
+M5.1 implements unsigned direct-wallet preparation for those selected markets and separate reviewed `approve(exactAmount)`, MarginBank `deposit`/`withdraw`, and pool `cancelOrder` calls. Each is simulated and requires an explicit wallet send. The browser journal stores public hashes locally and distinguishes wallet submission, receipt confirmation and current open-order observation. Radar uses only fresh trusted top-five depth and mark samples; sizing uses verified precision and an entered stop *reference*, not an installed stop. These are implemented and covered by unit or mocked Chromium tests. **No M5.1 user-wallet transaction or margin lifecycle has been independently verified on-chain.** The owner bot proof is separate.
+
+Remaining product gaps: user-wallet live transaction validation, guaranteed reduce-only/close, market/IOC execution controls, complete historical fill and PnL accounting, independently verified alerts outside an open tab, and an actual model-backed AI Copilot. The present deterministic radar and Guard must not be presented as AI. Browser trading still runs on loopback and is not a public deployment.
+
 Status: **browser trading foundation, not a verified public trading product**. No M5 user trade was signed or broadcast. A successful mocked receipt proves only UI behavior. The M4 owner bot proof remains separate and unchanged.
 
 ## Provenance and deployment check

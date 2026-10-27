@@ -1,6 +1,6 @@
 # Perp Canary
 
-Perp Canary is a BTC-PERP trading terminal and Canary Trade Guard foundation for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first owner bot order. M5 adds a direct injected-wallet PostOnly order review and wallet-confirmed send path. **No M5 user-wallet trade has been executed or verified on-chain.** The existing owner bot workflow and encrypted keystore remain separate.
+Perp Canary is a multi-market trading terminal and Canary Trade Guard foundation for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first owner bot order. M5.1 discovers markets through the official SDK and factory, checks selected-market book and grid against the pool, and prepares wallet-confirmed PostOnly orders, bounded margin actions and open-order cancellation. **No M5 user-wallet transaction has been executed or verified on-chain.** The existing owner bot workflow and encrypted keystore remain separate.
 
 ## Verified first order
 
@@ -22,7 +22,7 @@ Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier resea
 
 The terminal keeps its graphite/purple trading layout across desktop and mobile. Its original Canary SVG is served locally as both the header mark and favicon; no external font or image request is required.
 
-The chart contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. Connect an injected EIP-1193 wallet on Hideki to read that EOA's actual gas, USDso, margin, position and open orders. Enter a BUY or SELL PostOnly limit, then click **Review wallet order**. Canary Trade Guard checks a fresh trusted market, tick/lot, size, mark deviation, margin, gas and contract simulation. The review shows the exact pool and EOA. Only **Confirm in wallet** asks the wallet to send; the server never signs for users. SELL can add a short and is not reduce-only. Market/IOC, margin deposits, cancellation and closing are not enabled yet. A separate button still copies the owner CLI prepare command for BUY.
+The chart contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. Select an SDK and factory verified market, then connect an injected EIP-1193 wallet on Hideki to read that EOA's actual gas, USDso, margin, position and open orders. Enter a BUY or SELL PostOnly limit, then click **Review wallet order**. Canary Trade Guard checks a fresh trusted market, on-chain tick/lot, size, mark deviation, margin, gas and contract simulation. The review shows the exact pool and EOA. Only **Confirm in wallet** asks the wallet to send; the server never signs for users. SELL can add a short and is not reduce-only. Exact amount approval, margin deposit/withdraw and cancellation have separate simulation, review and wallet confirmation. Market/IOC and guaranteed position closing are unavailable. A separate button still copies the owner CLI prepare command for BTC BUY.
 
 To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**
 
@@ -40,6 +40,7 @@ The historical owner-bot risk panel uses `NOT_RUN` for checks that have not been
 
 - [Architecture](docs/architecture.md)
 - [M5 trading capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md)
+- [M5.1 continuation report](docs/m51-progress-report.md)
 - [Security model](docs/security-model.md)
 - [Verified on-chain evidence](docs/verified-onchain-evidence.md)
 - [Demo walkthrough](docs/demo-walkthrough.md)
