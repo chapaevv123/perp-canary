@@ -8,7 +8,7 @@ async function reader(status: number, contentType: string, body: string) {
   const calls = { text: 0 };
   const fetch = async () => ({ status, ok: status >= 200 && status < 300,
     headers: { get: () => contentType }, text: async () => { calls.text++; return body; } });
-  const html = await readFile('web/index.html', 'utf8');
+  const html = await readFile('web/legacy.html', 'utf8');
   const functionSource = html.match(/^async function readJson\(url,options\).*$/m)?.[0];
   assert.ok(functionSource, 'readJson must stay inline so an older server can serve it');
   runInNewContext(`${functionSource}\nwindow.canaryReadJson=readJson`, { window, fetch });

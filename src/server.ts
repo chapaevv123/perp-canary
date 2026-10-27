@@ -17,16 +17,20 @@ import { inspectBotConnection } from './bot-foundation.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
 import { readBotPlanEvidence } from './bot-evidence.ts';
-import { buildPreparedPlan, positionEffect } from './delegated-plan.ts';
+import { buildPreparedPlan, positionEffect, type PreparedPlan } from './delegated-plan.ts';
 import { readExecutionLedger } from './execution-ledger.ts';
 import { readForensicEvidence } from './delegated-forensics.ts';
 import { buildOrderActionPlan, discoverBtcOrders, inspectOrderAction } from './order-actions.ts';
 import { readOrderActionForensics } from './order-action-forensics.ts';
 import { assessCanary, assessPlanCanary, type CanarySignal } from './canary-safety.ts';
 import { localRequestRejection } from './server-security.ts';
+import { publicProof, readFirstOrderHistory, readFirstProof, readTerminalMarket } from './terminal-data.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
+const legacyHtmlPath = resolve('web/legacy.html');
+const terminalCssPath = resolve('web/terminal.css');
+const terminalJsPath = resolve('web/terminal.js');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
 const forensicsJsPath = resolve('web/forensics.js');
@@ -68,7 +72,26 @@ createServer(async (request, response) => {
     const rejection = localRequestRejection({ host: request.headers.host, origin: request.headers.origin,
       fetchSite: request.headers['sec-fetch-site'], method: request.method }, port);
     if (rejection) { json(response, 403, { error: rejection }); return; }
-    if (request.method === 'POST' && path === '/api/v1/snapshot') {
+    if (request.method === 'GET' && path === '/api/v1/terminal/proof') {
+      json(response, 200, publicProof(await readFirstProof()));
+    } else if (request.method === 'GET' && path === '/api/v1/terminal/market') {
+      json(response, 200, await readTerminalMarket());
+    } else if (request.method === 'GET' && path === '/api/v1/terminal/history') {
+      json(response, 200, await readFirstOrderHistory());
+    } else if (request.method === 'GET' && path === '/api/v1/terminal/plan') {
+      const records = await readBotPlanEvidence(botEvidenceDir);
+      const active = records.map(row => row.plan).filter((plan): plan is PreparedPlan =>
+        plan.schema === 'perp-canary/delegated-plan/v2' && plan.status === 'PREPARED' &&
+        Date.parse(plan.expiresAt) > Date.now()).at(-1);
+      json(response, 200, active ? { hash: active.hash, side: active.side, price: active.price,
+        quantity: active.quantity, expiresAt: active.expiresAt, status: 'PREPARED_RECHECK_REQUIRED' } : null);
+    } else if (request.method === 'GET' && path === '/terminal.css') {
+      response.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(terminalCssPath));
+    } else if (request.method === 'GET' && path === '/terminal.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(terminalJsPath));
+    } else if (request.method === 'POST' && path === '/api/v1/snapshot') {
       if (refreshing) { json(response, 409, { error: 'A snapshot refresh is already running' }); return; }
       refreshing = true;
       try {
@@ -228,6 +251,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(htmlPath));
+    } else if (request.method === 'GET' && path === '/legacy') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(legacyHtmlPath));
     } else if (request.method === 'GET' && path === '/wallet.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(walletJsPath));

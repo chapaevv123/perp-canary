@@ -1,102 +1,56 @@
 # Perp Canary
 
-Perp Canary observes dreamDEX perpetual markets on Somnia Hideki testnet and checks whether a real transaction receipt matches a saved order plan. It uses the official `@somnia-chain/markets-sdk` for market, feed, account and risk reads. M2.6 locks browser-wallet signing and broadcast; only read-only plans and simulations remain available. The local server never holds a key or sends a transaction.
+Perp Canary is a local BTC-PERP terminal and owner-confirmed execution workflow for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first real on-chain order. The browser is read-only: it does not sign, send, cancel, or close orders.
 
-**M0 evidence (26 October 2026):** SDK `0.32.1`, Hideki chain ID `50383`, and RPC/WSS connectivity were checked in a complete `host-m0.ps1` run. Three `LIVE` snapshots are included. The latest records 21 markets at block `33751413`; all 21 received a feed-only `GREEN` verdict at observation time.
+## Verified first order
 
-**M1 development:** The existing local app now offers live dry-run plans for place, cancel and close operations, and can compare an existing Hideki receipt with a plan. These paths have local tests. No owner wallet, actual order, cancel, close, or receipt has been exercised through this M1 flow yet. The contest whitelist and submission eligibility remain unconfirmed.
+The first owner-approved PostOnly BUY was mined in block **34465778**. The receipt succeeded and the pool emitted `OrderPlaced` and `OrderRested` for order **14978756187852164026332**. Transaction: `0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121`. The independent [proof bundle](canary-proofs/canary-proof-1793098877887-4230656d134c.json) has SHA-256 `4230656d134ca6644edfbbcd5ec97468e8381e672c78bdb5ddd5730518d20e92`.
 
-**M2 preparation:** The same UI discovers MetaMask/Rabby, checks Hideki chain ID, STT, USDso, MarginBank health, market restrictions, SDK margin/size previews and gas simulation. `buildPlacePerpOrder` produces unsigned calldata. The original M2 browser send control is disabled under the M2.6 execution lock. See [wallet and execution flow](docs/m2-wallet.md).
+Later on-chain order reads show `NOT_OPEN_AT_READ`, while the wallet position was **0.05416 BTC** at the latest read. An indexed event scan found no fill, cancellation, or expiry event for this order through the scanned block. Its disappearance cause remains **UNKNOWN**. See [verified evidence and lifecycle](docs/verified-onchain-evidence.md).
 
-**M2.2 wallet audit:** Read-only Wallet Architecture Diagnostics now separates the connected EOA from a user-supplied dreamDEX trading wallet, reads each address's Hideki balances, MarginBank state, position and indexed orders, and inspects an existing transaction hash for pool owner events. Missing account links remain `UNKNOWN`. The M2 direct EOA order path does not sign for an app-managed wallet. See [wallet architecture audit](docs/wallet-architecture-audit.md).
+## Getting started on Windows
 
-**M2.4 network and funding:** The existing dashboard now checks public EOA and trading-wallet balances independently on Hideki 50383, Shannon 50312 and mainnet 5031, verifies each RPC's chain ID, and explains funding readiness, official test routes and unresolved app balances. A LIVE sample found the owner-reported `26.306836 SOMI` amount as a numerical match to Shannon EOA **STT**, while the supplied trading address held Hideki STT and a 1000 USDso MarginBank voucher floor. This does not prove the app token label or account link. See [network and funding intelligence](docs/network-funding-intelligence.md).
-
-**M2.5 live trade forensics:** A supplied public transaction was found only on Hideki. The new read-only dashboard section verifies the transaction, receipt, BTC-PERP market identity, operator calldata, matching fill and trading-wallet position event. A separate committed SHA-256 artifact preserves the raw chain data and bounded call trace; the M0/M1 evidence chains remain intact. See [live trade forensics](docs/live-trade-forensics.md).
-
-**M2.6 trading authorization:** The dashboard now checks Wallet 1 ownership, the official Hideki permission registry, effective/global/per-pool grants for place/cancel/reduce, operator STT, MarginBank, market support and read-only simulation. A delegated `placeOrderFor` prototype produces short-lived unsigned calldata. The historical M2.5 sender is currently authorized but its signer is not available to Perp Canary. No signature or broadcast path is enabled. See [trading authorization audit](docs/trading-authorization-audit.md) and [local Pulse Evolution ledger](docs/pulse-evolution-ledger.md).
-
-## How it works
-
-```text
-Hideki RPC ── chain ID, block ───────────────┐
-Markets SDK ── indexer market rows ──────────┤
-Markets SDK ── system, factory, feed reads ──┼─> canonical JSON + SHA-256 links
-                                              └─> local verifier ─> API + web view
-```
-
-The collector calls these confirmed SDK methods on a `SomniaMarkets` client:
-
-| Method | Observation |
-| --- | --- |
-| `listPerpMarkets()` | Indexer market rows |
-| `getPerpSystemConfig(marginBank)` | MarginBank system configuration |
-| `listPerpPoolStatuses({ factory })` | Factory registration, restrictions, and tradeability fields |
-| `getPerpFeedStatus(poolAddress)` | Per-pool mark feed status |
-
-The SDK is configured for Hideki WSS and the dreamDEX indexer, without a signer. `SomniaMarkets.close()` releases its owned WebSocket after collection, including failure paths. A 180-second collection deadline reports the current read phase; the host script also bounds the snapshot subprocess to 240 seconds. These limits fail the run with a diagnostic and retain existing evidence.
-
-## Reproduce the evidence
-
-Requirements: Windows PowerShell, Node.js 22.18+, npm, and outbound HTTPS/WSS access to the endpoints shown in `src/live.ts`. No wallet or private key is needed.
+Requires Node.js 22.18+, npm, Windows PowerShell, and access to the configured Hideki RPC/WSS and SDK indexer. Viewing the site needs no wallet password.
 
 ```powershell
+cd C:\Users\Win10_Game_OS\Pulse\projects\perp-canary
 npm.cmd ci
-npm.cmd run verify
-npm.cmd run typecheck
-npm.cmd run lint
-npm.cmd test
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-m0.ps1
+npm.cmd run serve
 ```
 
-`host-m0.ps1` inspects the installed SDK exports, checks RPC chain ID `50383` and WSS, writes a fresh read-only snapshot, then runs typecheck, lint, tests, and `verify`. The separate `npm.cmd run snapshot` command performs only collection. `npm.cmd run serve` starts the local view at `http://127.0.0.1:8787`. Its M1 forms run read-only SDK preflight and inspect a transaction hash supplied by the user. See [Execution Integrity](docs/execution-integrity.md) for the exact API and manual workflow.
+Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier research and diagnostics UI remains at `/legacy`.
 
-| Included snapshot (UTC) | Block | Markets | Feed verdicts | SHA-256 head |
-| --- | ---: | ---: | --- | --- |
-| 2026-10-26 14:34:43 | 33730827 | 21 | 21 GREEN | `31d75556ed7209c06b611d44990e153b928209a36e957f53462756f9e78f5b49` |
-| 2026-10-26 14:50:02 | 33740062 | 21 | 21 GREEN | `cd5e07279a0bd403be8ca60a2ce7d1eceb64fa4981aa8e4dc07b26cb4975d3f5` |
-| 2026-10-26 15:09:00 | 33751413 | 21 | 21 GREEN | `5fa7c458f27f878f2b2e8daa8052cf6dea75754145716b990d7038a13ac702f0` |
+The chart begins when the page opens and contains only actual mark quotes collected during that session. Empty or stale reads remain visibly unknown. The right-hand trade panel is a **local visual preview**: its quantity and price fields do not prepare or submit a plan. BUY PostOnly is the verified owner path; unsupported SELL and IOC controls are disabled.
 
-`verify` checks each snapshot's canonical hash and `previousHash` link. Once this repository is public, its Git commit anchors the included head against replacement of the whole evidence directory. New snapshots extend the chain locally and should be reviewed before any later publication.
+To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**
 
-## What the evidence means
+## Confirmed capabilities and limits
 
-`GREEN` says only that the observed pool feed reported `markPriceOk`, a nonzero mark, and an index timestamp. `AMBER` means the timestamp was unavailable; `RED` means a confirmed failed or zero mark; `UNKNOWN` means the read failed or its shape was invalid. `/api/v1/gate` remains `UNKNOWN` because execution availability and order conformance are not measured.
+- Live Hideki mark, pinned SDK + direct RPC best bid/ask, up to five verified contract book levels per side, freshness, block, delegated place grant, wallet position, and open orders.
+- Read-only on-chain event scan for the first order with block and transaction provenance. Missing lifecycle evidence remains `UNKNOWN`.
+- Copy controls for proof and transaction hashes, plan hash, and, only for an unexpired saved plan, the owner CLI command and exact confirmation.
+- Local SHA-256 proof bundle, verified receipt, and evidence timeline. The historical research UI and CLI remain available.
+- Owner CLI PostOnly workflow with 300-second plan expiry, maximum 100 USDso notional, maximum 0.1 STT gas, maximum 1% mark deviation, TRUSTED market snapshot, margin, grants, nonce, simulation, idempotency, and immediate final preflight.
 
-Indexer rows can lag the sampled RPC block. System, factory, and feed reads happen after the block sample and are not pinned to it. A valid local hash chain proves internal file consistency, not the current market state or independent truth of the upstream data. M2.6 can produce an unsigned testnet PLACE order but cannot submit it. Whitelist access and bounty eligibility remain unconfirmed.
+The browser's risk panel uses `NOT_RUN` for checks that have not been performed for a specific plan. A displayed quote never means an order is approved. SELL, IOC, automatic cancellation, and delegated position close are not claimed as verified features.
 
-See [architecture](docs/architecture.md) for the data flow. Perp Canary is independent of dreamDEX and Somnia. Original Perp Canary code is licensed under [MIT](LICENSE).
+## Documentation
 
-# M3.0 bot foundation
+- [Architecture](docs/architecture.md)
+- [Security model](docs/security-model.md)
+- [Verified on-chain evidence](docs/verified-onchain-evidence.md)
+- [Demo walkthrough](docs/demo-walkthrough.md)
+- [Hackathon submission draft](docs/hackathon-submission-draft.md)
+- [Historical implementation notes](docs/m4-first-proof.md)
 
-The Bot Connection panel reports local public keystore metadata and live Hideki delegated permissions. Run `npm run bot -- status` in a local terminal. `npm run bot -- create` is an owner-controlled interactive action that creates a new encrypted bot wallet only when deliberately invoked; no bot wallet is bundled with this repository. `npm run bot -- unlock` validates locally and returns to locked state. See [M3.0 bot foundation](docs/m3-bot-foundation.md).
+## Development checks
 
-## M3.3 delegated execution
+```powershell
+npm.cmd test
+npm.cmd run lint
+npm.cmd run typecheck
+npm.cmd run verify
+git diff --check
+```
 
-The Execution Control panel prepares an expiring BTC-PERP `placeOrderFor` plan with a SHA-256 hash after fresh read-only permission, market, margin, gas and simulation checks. The browser cannot sign or send. The separate `npm run bot-execute -- execute <plan-hash>` command is reserved for a later, explicit owner decision: it requires an interactive terminal, exact hash confirmation and local keystore password, then repeats all checks before one Hideki send. Do not run it while reviewing or testing M3.3. An uncertain send stays reserved as `UNKNOWN`; use read-only `npm run bot-execute -- reconcile <plan-hash> <tx-hash>` after inspecting the on-chain transaction. See [M3.3 execution guide](docs/m3-delegated-execution.md).
-
-## M3.4 order lifecycle
-
-Execution Control now reads Wallet 1's on-chain BTC-PERP position and resting orders and prepares separate CANCEL and REDUCE_ORDER plans using the documented `cancelOrderFor` and `reduceOrderFor` calls. The latter changes a resting order, **not an open position**. Both write paths use the same local CLI confirmation, signer, durable intent ledger and receipt evidence as PLACE. Position CLOSE remains blocked until an atomic reduce-only delegated method is proven. See [M3.4 demo and evidence guide](docs/m3-4-lifecycle-demo.md). All M3.4 write stages were tested with fixtures only.
-
-Existing public proof: [M2.5 BTC-PERP transaction evidence](trade-evidence/tx-e164fc656bd996ce7be711a4753bb40f6088f18e8abe7dc60b530fa68d4a79cc.json) is a verified **dreamDEX UI trade**, not a Perp Canary execution. [M2.6 authorization evidence](authorization-evidence/authorization-33989411.json) is a historical read-only grant snapshot. Run `npm run verify` for SHA-256 chain verification; LIVE state must always be read again.
-
-## M3.5 first execution review
-
-[M3.5 research and owner checklist](docs/m3-5-readiness.md) records official close-method research, public on-chain close receipts/traces, current read-only BTC-PERP observations, an expired unsaved research plan, fixture dry run, and contest submission gaps. **PLACE is READY_FOR_OWNER_REVIEW for a new owner-selected plan; CLOSE_POSITION remains BLOCKED.** The existing `+0.05416` BTC Wallet 1 LONG is netted: a new BUY increases that LONG. Opposite-side PLACE is blocked while a position exists because an ordinary order has no proven atomic reduce-only guarantee. No bot transaction was submitted in M3.5. For an ephemeral public-data preflight, run `node --experimental-strip-types scripts/m35-readonly.ts <owner-reviewed-buy-limit> 0.00013`; it prints and does not save the result. The current market minimum must still be checked each time. Submission whitelist status and the exact DoraHacks cutoff remain unconfirmed.
-
-## M3.6 execution diagnostics
-
-The failed saved plan `0c522886fcd6410659150d3c5f7572ff1f8b187c50322120f6a38366273b21e5` is expired. Its CLI failure occurred during the saved-calldata gas estimate before confirmation, password, intent reservation or broadcast. The contract error selector was not retained, so the root cause remains `UNKNOWN_REVERT`. The shared decoder now reports confirmed official ABI errors or an explicit unknown, and saves a hash-verified, secret-free local diagnostic instead of a raw viem dump. `npm.cmd run bot-execute -- check <fresh-plan-hash>` repeats PLACE checks without unlocking, signing, reserving or sending. See the [first-trade runbook](docs/m3-6-first-trade-runbook.md) before any separate owner decision. Evolution Score remains **26**.
-
-## M4.0 first PostOnly order and Canary Proof
-
-[M4.0 owner handoff](docs/m4-first-proof.md) adds an official SDK `POST_ONLY=3` delegated BUY preparation command and a versioned evidence bundle with independent read-only transaction and receipt verification. `npm.cmd run canary-prepare -- BUY <owner-selected-limit> <quantity>` creates a short-lived plan only after market, permission, margin, gas and non-marketable checks pass. `npm.cmd run canary-proof -- create <plan-hash>` exports its evidence; `npm.cmd run canary-verify -- <bundle-path>` checks plan integrity and independently compares any transaction with Hideki. A prepared plan is not a verified trade. The first live order still requires a separate owner decision through the existing local `bot-execute execute` flow.
-
-## M4.0.1 market-data integrity
-
-[M4.0.1 incident audit and recovery](docs/m4-0-1-market-integrity.md) documents the reported crossed BTC-PERP book and the new fail-closed checks. The system now requires a fresh, two-sided, uncrossed, tick-aligned book with matching pinned SDK and direct RPC reads before preparing or rechecking IOC and PostOnly PLACE. `node --experimental-strip-types scripts/m401-market-check.ts` is read-only and reports raw prices, provenance and integrity status. A crossed or unproven book blocks the local execution path before estimate, signing or broadcast.
-
-## M4.1 first-proof fast track
-
-[M4.1 owner handoff](docs/m4-1-first-proof-fast-track.md) describes `npm.cmd run canary-price`, the owner-selected `npm.cmd run canary-first-proof` quote-to-check workflow, and read-only `npm.cmd run canary-status -- <plan-hash>`. These commands never sign or send. A READY plan still requires a separate owner decision through `bot-execute execute`.
+`verify` checks local evidence chains and proof artifacts. These commands do not sign or send a transaction.
