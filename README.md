@@ -96,3 +96,7 @@ The failed saved plan `0c522886fcd6410659150d3c5f7572ff1f8b187c50322120f6a383662
 ## M4.0.1 market-data integrity
 
 [M4.0.1 incident audit and recovery](docs/m4-0-1-market-integrity.md) documents the reported crossed BTC-PERP book and the new fail-closed checks. The system now requires a fresh, two-sided, uncrossed, tick-aligned book with matching pinned SDK and direct RPC reads before preparing or rechecking IOC and PostOnly PLACE. `node --experimental-strip-types scripts/m401-market-check.ts` is read-only and reports raw prices, provenance and integrity status. A crossed or unproven book blocks the local execution path before estimate, signing or broadcast.
+
+## M4.1 first-proof fast track
+
+[M4.1 owner handoff](docs/m4-1-first-proof-fast-track.md) describes `npm.cmd run canary-price`, the owner-selected `npm.cmd run canary-first-proof` quote-to-check workflow, and read-only `npm.cmd run canary-status -- <plan-hash>`. These commands never sign or send. A READY plan still requires a separate owner decision through `bot-execute execute`.

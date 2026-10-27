@@ -12,6 +12,7 @@ import { BTC_POOL, HIDEKI_MARGIN_BANK, OWNER_TRADING_WALLET, type RawLog } from 
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
 import { BOOK_SOURCE } from '../src/market-integrity.ts';
 import { RPC } from '../src/rpc-health.ts';
+import { summarizeFirstProofStatus, type OrderDiscovery } from '../src/first-proof-status.ts';
 
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
 const input = { side: 'BUY' as const, price: '79990', quantity: '0.00013', executionMode: 'POST_ONLY' as const };
@@ -66,6 +67,28 @@ function signedLedger(p = plan()) {
   return [{ planHash: p.hash, intentId: p.intentId, state: 'SIGNED' as const, txHash,
     hash: 'ledger-hash' }] as unknown as Parameters<typeof buildCanaryProof>[1];
 }
+
+test('read-only status distinguishes OrderRested from the current open-order state', () => {
+  const p = plan();
+  const chain = snapshot(p, '0x1', [log('OrderPlaced', 0), log('OrderRested', 1)]);
+  const proof = { verdict: 'VERIFIED' as const, classification: 'ONCHAIN_SUCCESS' as const,
+    outcome: 'RESTED_AT_PLACEMENT' as const, reasons: [], independentChainRead: true,
+    planHash: p.hash, txHash };
+  const base = { chainId: 50383, block: '457', owner: OWNER_TRADING_WALLET,
+    pool: BTC_POOL, position: { sizeRaw: '5416000' }, orders: [] } as unknown as OrderDiscovery;
+  const absent = summarizeFirstProofStatus(p, proof, chain, base);
+  assert.equal(absent.orderId, '7');
+  assert.equal(absent.currentOrderState, 'NOT_OPEN_AT_READ');
+  assert.equal(absent.outcome, 'RESTED_AT_PLACEMENT');
+  const open = summarizeFirstProofStatus(p, proof, chain, { ...base,
+    orders: [{ id: '7', owner: OWNER_TRADING_WALLET, pool: BTC_POOL,
+      remainingRaw: '13000' }] } as unknown as OrderDiscovery);
+  assert.equal(open.currentOrderState, 'OPEN_AT_READ');
+  assert.match(open.nextAction, /separate owner-approved CANCEL/);
+  assert.equal(summarizeFirstProofStatus(p, proof, chain, null).currentOrderState, 'UNKNOWN');
+  assert.equal(summarizeFirstProofStatus(p, { ...proof, verdict: 'FAILED' }, chain,
+    base).currentOrderState, 'UNKNOWN');
+});
 
 test('official PostOnly calldata and nonmarketable book produce a bounded plan', () => {
   const p = plan();
