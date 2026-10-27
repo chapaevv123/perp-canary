@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, parseUnits } from 'viem';
 import { orderBookEventsAbi } from '@somnia-chain/markets-sdk';
 import { buildPreparedPlan, PLACE_ABI, verifyPreparedPlan } from '../src/delegated-plan.ts';
@@ -12,6 +15,8 @@ import { BTC_POOL, HIDEKI_MARGIN_BANK, OWNER_TRADING_WALLET, type RawLog } from 
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
 import { BOOK_SOURCE } from '../src/market-integrity.ts';
 import { RPC } from '../src/rpc-health.ts';
+import { appendBotPlanEvidence } from '../src/bot-evidence.ts';
+import { assertPlanNotExpired, loadExecutableBotPlan, PlanLoadError } from '../src/bot-plan-loader.ts';
 import { summarizeFirstProofStatus, type OrderDiscovery } from '../src/first-proof-status.ts';
 
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
@@ -104,6 +109,37 @@ test('official PostOnly calldata and nonmarketable book produce a bounded plan',
   assert.equal(buildPreparedPlan(fixture({ permissions: { place: { effective: { status: 'BLOCKED' } } } }), input).status, 'BLOCKED');
   assert.equal(buildPreparedPlan(fixture({ estimatedGasUnits: '10000000' }), input).status, 'BLOCKED');
   assert.equal(buildPreparedPlan(fixture({ gasPriceWei: '50000000000' }), input).status, 'BLOCKED');
+});
+
+test('first-proof PREPARED plan persists, loads by canonical hash, and passes bot-execute read-only check', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'perp-canary-plan-roundtrip-'));
+  try {
+    const prepared = plan();
+    const record = await appendBotPlanEvidence(dir, prepared);
+    assert.notEqual(record.hash, prepared.hash); // Evidence filename uses record hash.
+    const loaded = await loadExecutableBotPlan(dir, prepared.hash);
+    assert.equal(prepared.hash.length, 64);
+    assert.equal(loaded.hash, prepared.hash);
+    assert.equal(loaded.status, 'PREPARED');
+    assert.equal(loaded.schema, 'perp-canary/delegated-plan/v2');
+    const checked = await checkDelegatedPlan(loaded, {
+      fresh: async () => fixture(), chainId: async () => 50383,
+      nonce: async () => 0, gasPrice: async () => 6_000_000_000n,
+      gasBalance: async () => parseUnits('5', 18),
+      estimateOriginal: async p => {
+        assert.equal(p.transaction?.data, loaded.transaction?.data);
+        return 2_000_000n;
+      } });
+    assert.equal(checked.passed, true);
+    await assert.rejects(loadExecutableBotPlan(dir, prepared.hash.slice(0, -1)), error =>
+      error instanceof PlanLoadError && error.reason === 'INVALID_PLAN_HASH');
+    await assert.rejects(loadExecutableBotPlan(dir, `g${prepared.hash.slice(1)}`), error =>
+      error instanceof PlanLoadError && error.reason === 'INVALID_PLAN_HASH');
+    await assert.rejects(loadExecutableBotPlan(dir, '0'.repeat(64)), error =>
+      error instanceof PlanLoadError && error.reason === 'PLAN_NOT_FOUND');
+    assert.throws(() => assertPlanNotExpired(loaded, Date.parse(loaded.expiresAt)), error =>
+      error instanceof PlanLoadError && error.reason === 'PLAN_EXPIRED');
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('PostOnly recheck blocks crossing, stale book, expiry and nonce conflict', () => {

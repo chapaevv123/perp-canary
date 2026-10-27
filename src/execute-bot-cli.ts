@@ -3,8 +3,8 @@ import { createPublicClient, getAddress, http, type Address, type Hex, type Tran
 import { SomniaMarkets, SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/markets-sdk';
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { readBotKeystore, withUnlockedBotSigner } from './bot-keystore.ts';
-import { readBotPlanEvidence } from './bot-evidence.ts';
-import { positionEffect, verifyPreparedPlan, type PreparedPlan } from './delegated-plan.ts';
+import { assertPlanNotExpired, loadExecutableBotPlan, PlanLoadError } from './bot-plan-loader.ts';
+import { positionEffect, type PreparedPlan } from './delegated-plan.ts';
 import { assessExecutionPreflight, assertExecutionMarketIntegrity, checkDelegatedPlan, ExecutionStageError,
   executeDelegatedPlan, type ExecutionPorts, type ReadOnlyExecutionPorts } from './delegated-execution.ts';
 import { decodeExecutionError } from './execution-error-decoder.ts';
@@ -17,7 +17,7 @@ import { withSnapshotSdk } from './lifecycle.ts';
 import { RPC } from './rpc-health.ts';
 import { promptHidden, promptText } from './local-prompt.ts';
 import { verifySignedBotTransaction } from './signed-transaction.ts';
-import { discoverBtcOrders, inspectOrderAction, verifyOrderActionPlan,
+import { discoverBtcOrders, inspectOrderAction,
   type OrderActionPlan } from './order-actions.ts';
 import { assessOrderActionPreflight, executeOrderActionPlan, type OrderActionPorts } from './order-action-execution.ts';
 import { assessOrderAction, saveOrderActionForensic } from './order-action-forensics.ts';
@@ -33,15 +33,6 @@ let executionEntered = false;
 const client = createPublicClient({ chain: hidekiTestnet,
   transport: http(RPC, { timeout: 15_000, retryCount: 0 }) });
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-async function loadPlan(hash: string): Promise<PreparedPlan | OrderActionPlan> {
-  if (!/^[0-9a-f]{64}$/.test(hash)) throw Error('Plan hash must be 64 lowercase hex characters');
-  const record = (await readBotPlanEvidence(botPlanDir)).find(item => item.plan.hash === hash);
-  if (!record || (record.plan.schema !== 'perp-canary/delegated-plan/v2' &&
-    record.plan.schema !== 'perp-canary/order-action-plan/v1')) throw Error('Verified delegated plan not found');
-  if (record.plan.schema === 'perp-canary/delegated-plan/v2') verifyPreparedPlan(record.plan);
-  else verifyOrderActionPlan(record.plan);
-  return record.plan;
-}
 async function currentPositionRaw(): Promise<string | null> {
   const controller = new AbortController();
   const sdk = new SomniaMarkets({ chain: hidekiTestnet,
@@ -122,8 +113,9 @@ async function main(): Promise<void> {
   if (!['execute', 'reconcile', 'check'].includes(operation ?? '') || !hash ||
     (operation !== 'reconcile' && txHash) || (operation === 'reconcile' && !txHash))
     throw Error('Usage: npm run bot-execute -- check|execute <plan-hash> | reconcile <plan-hash> <tx-hash>');
-  const plan = await loadPlan(hash);
+  const plan = await loadExecutableBotPlan(botPlanDir, hash);
   if (plan.schema === 'perp-canary/delegated-plan/v2') activePlan = plan;
+  if (operation !== 'reconcile') assertPlanNotExpired(plan);
   const keystore = await readBotKeystore();
   if (!keystore || !same(keystore.address, plan.operator)) throw Error('Local bot address differs from saved plan');
   if (operation === 'reconcile') {
@@ -222,17 +214,22 @@ async function main(): Promise<void> {
 }
 try { await main(); }
 catch (error) {
-  const stage = error instanceof ExecutionStageError ? error.stage :
-    activeOperation === 'execute' && executionEntered ? 'BROADCAST' : 'PLAN_LOAD';
-  const original = error instanceof ExecutionStageError ? error.original : error;
-  const decoded = decodeExecutionError(original, stage,
-    stage === 'BROADCAST' ? 'UNKNOWN' : 'NO');
-  if (activePlan) {
-    try {
-      const diagnostic = await saveExecutionDiagnostic(diagnosticDir, activePlan,
-        error instanceof ExecutionStageError ? error.observation : undefined, decoded, RPC);
-      console.error(formatExecutionDiagnostic(diagnostic));
-    } catch { console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}\nAction: ${decoded.safeNextAction}`); }
-  } else console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}`);
-  process.exitCode = 1;
+  if (error instanceof PlanLoadError) {
+    console.error(`EXECUTION BLOCKED\nStage: PLAN_LOAD\nReason: ${error.reason}\nDetail: ${error.message}\nTransaction sent: NO\nAction: ${error.action}`);
+    process.exitCode = 1;
+  } else {
+    const stage = error instanceof ExecutionStageError ? error.stage :
+      activeOperation === 'execute' && executionEntered ? 'BROADCAST' : 'PLAN_LOAD';
+    const original = error instanceof ExecutionStageError ? error.original : error;
+    const decoded = decodeExecutionError(original, stage,
+      stage === 'BROADCAST' ? 'UNKNOWN' : 'NO');
+    if (activePlan) {
+      try {
+        const diagnostic = await saveExecutionDiagnostic(diagnosticDir, activePlan,
+          error instanceof ExecutionStageError ? error.observation : undefined, decoded, RPC);
+        console.error(formatExecutionDiagnostic(diagnostic));
+      } catch { console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}\nAction: ${decoded.safeNextAction}`); }
+    } else console.error(`EXECUTION BLOCKED\nStage: ${stage}\nReason: ${decoded.reason}\nTransaction sent: ${decoded.transactionSent}`);
+    process.exitCode = 1;
+  }
 }

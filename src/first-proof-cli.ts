@@ -8,6 +8,7 @@ import { inspectTradingAuthorization } from './trading-authorization.ts';
 import { ownerBuyLimitReasons, priceReport } from './first-proof.ts';
 import { buildPreparedPlan } from './delegated-plan.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
+import { loadExecutableBotPlan } from './bot-plan-loader.ts';
 
 const runFile = promisify(execFile);
 const mode = process.argv[2];
@@ -55,8 +56,12 @@ try {
           action: 'Market or preflight changed. Start canary-first-proof again; no price is changed automatically.' }, null, 2));
         process.exitCode = 1;
       } else {
-        await appendBotPlanEvidence('bot-evidence', plan);
-        let checked: { status?: string; passed?: boolean; blockers?: string[]; marketComparison?: unknown };
+        const saved = await appendBotPlanEvidence('bot-evidence', plan);
+        const loaded = await loadExecutableBotPlan('bot-evidence', plan.hash);
+        if (loaded.hash !== plan.hash || loaded.status !== 'PREPARED')
+          throw Error('Persisted plan did not round-trip through bot-execute loader');
+        let checked: { status?: string; passed?: boolean; planHash?: string;
+          blockers?: string[]; marketComparison?: unknown };
         try {
           const result = await runFile(process.execPath,
             ['--experimental-strip-types', 'src/execute-bot-cli.ts', 'check', plan.hash],
@@ -70,18 +75,20 @@ try {
           process.exitCode = 1;
           checked = { status: 'BLOCKED' };
         }
-        if (checked.status === 'READY_FOR_OWNER_REVIEW' && checked.passed === true) {
-          console.log(JSON.stringify({ status: 'READY_FOR_OWNER_REVIEW', planHash: plan.hash,
+        if (checked.status === 'READY_FOR_OWNER_REVIEW' && checked.passed === true &&
+          checked.planHash === loaded.hash && Date.now() < Date.parse(loaded.expiresAt)) {
+          console.log(JSON.stringify({ status: 'READY_FOR_OWNER_REVIEW', planHash: loaded.hash,
             expiresAt: plan.expiresAt, side: plan.side, price: plan.price,
             quantity: plan.quantity, expectedPositionEffect: 'BUY can increase existing LONG if filled',
             orderNotionalWei: plan.risk.orderNotionalWei,
             estimatedGasUnits: plan.risk.estimatedGasUnits, gasLimit: plan.risk.gasLimit,
             maxGasCostWei: plan.risk.maxGasCostWei, recheck: checked.marketComparison,
-            transactionSent: 'NO', ownerOnlyCommand: `npm.cmd run bot-execute -- execute ${plan.hash}`,
+            evidenceRecordHash: saved.hash, evidenceDirectory: 'bot-evidence',
+            transactionSent: 'NO', ownerOnlyCommand: `npm.cmd run bot-execute -- execute ${loaded.hash}`,
             note: 'Separate owner decision required. The existing CLI repeats checks and asks for exact hash.' }, null, 2));
         } else if (process.exitCode !== 1) {
           console.log(JSON.stringify({ status: 'BLOCKED', planHash: plan.hash,
-            blockers: checked.blockers ?? ['Read-only check did not return READY_FOR_OWNER_REVIEW'],
+            blockers: checked.blockers ?? ['Read-only check did not confirm this saved plan or the plan expired'],
             transactionSent: 'NO', action: 'Refresh market and create a new plan; never reuse or reprice this plan.' }, null, 2));
           process.exitCode = 1;
         }
