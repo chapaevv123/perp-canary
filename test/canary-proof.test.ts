@@ -178,6 +178,22 @@ test('PostOnly recheck blocks crossing, stale book, expiry and nonce conflict', 
   assert.equal(assessExecutionPreflight(p, fixture(), { ...base, now: Date.parse(p.expiresAt) }).passed, false);
 });
 
+test('a newer trusted book snapshot alone does not reject a prepared PostOnly plan', async () => {
+  const prepared = plan();
+  const current = fixture();
+  const fresh = fixture({ sampledBlock: '124', bookTops: {
+    ...current.bookTops, blockNumber: '124',
+    blockHash: `0x${'cd'.repeat(32)}`, postReadBlockHash: `0x${'cd'.repeat(32)}`,
+  } });
+  const checked = await checkDelegatedPlan(prepared, {
+    fresh: async () => fresh, chainId: async () => 50383,
+    nonce: async () => 0, gasPrice: async () => 6_000_000_000n,
+    gasBalance: async () => parseUnits('5', 18), estimateOriginal: async () => 2_000_000n,
+  });
+  assert.equal(checked.passed, true, checked.blockers.join('; '));
+  assert.equal(checked.marketComparison.currentBlockNumber, '124');
+});
+
 test('changed book between preparation, check and execution blocks before sign or send', async () => {
   const p = plan();
   const raw = (value: string) => parseUnits(value, 18).toString();

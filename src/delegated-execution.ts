@@ -7,6 +7,7 @@ import type { ForensicsBody } from './trade-forensics.ts';
 import type { ExecutionStage } from './execution-error-decoder.ts';
 import { parseUnits } from 'viem';
 import { validateMarketSnapshot } from './market-integrity.ts';
+import { FinalExecutionError, type FinalExecutionFailure } from './final-execution-diagnostics.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export type ExecutionPorts = { fresh: () => Promise<Observation>; chainId: () => Promise<number>;
@@ -14,7 +15,8 @@ export type ExecutionPorts = { fresh: () => Promise<Observation>; chainId: () =>
   gasBalance: () => Promise<bigint>; estimateOriginal: (plan: PreparedPlan) => Promise<bigint>;
   confirm: (plan: PreparedPlan) => Promise<boolean>;
   sign: (transaction: TransactionSerializable, expectedAddress: string) => Promise<Hex>;
-  verifySigned: (raw: Hex, expected: TransactionSerializable, operator: string) => Promise<boolean>;
+  verifySigned: (raw: Hex, expected: TransactionSerializable, operator: string) =>
+    Promise<boolean | { passed: true } | FinalExecutionFailure>;
   broadcastOnce: (raw: Hex) => Promise<Hex>;
   receiptAndForensics: (txHash: Hex) => Promise<{ body: ForensicsBody; currentPositionRaw: string | null } | null> };
 export type PreflightState = { passed: boolean; blockers: string[]; nonce: number;
@@ -151,7 +153,7 @@ export function assessExecutionPreflight(plan: PreparedPlan, fresh: Observation,
 }
 export type ExecutionOutcome = { state: 'CANCELLED' | 'BLOCKED' | 'UNKNOWN' | 'VERIFIED' | 'AMBER' | 'RED';
   planHash: string; txHash: string | null; reasons: string[]; forensicHash?: string;
-  marketComparison?: PreflightState['marketComparison'] };
+  marketComparison?: PreflightState['marketComparison']; diagnostic?: FinalExecutionFailure };
 export async function dispatchApprovedTransaction(input: { planHash: string; intentId: string;
   expiresAt?: string;
   operator: string; pool: string; data: Hex; gasLimit: string; gasPriceWei: string; nonce: number },
@@ -168,15 +170,22 @@ export async function dispatchApprovedTransaction(input: { planHash: string; int
   catch (error) {
     await appendExecutionState(ledger, input.intentId, input.planHash, 'BLOCKED_PRE_BROADCAST', null);
     if (error instanceof ExecutionStageError) throw error;
-    return { ...base, state: 'BLOCKED', reasons: ['Local signing failed; no transaction was broadcast'] };
+    const diagnostic: FinalExecutionFailure = error instanceof FinalExecutionError ? error.failure :
+      { passed: false, stage: 'LOCAL_SIGN', reason: 'LOCAL_SIGN_FAILED' };
+    return { ...base, state: 'BLOCKED', diagnostic,
+      reasons: [`${diagnostic.stage}: ${diagnostic.reason}; no transaction was broadcast`] };
   }
-  let signedMatches = false;
-  try { signedMatches = await ports.verifySigned(raw, transaction, input.operator); }
-  catch { /* Verification failure is pre-broadcast and terminal. */ }
-  if (!signedMatches) {
+  let verification: boolean | { passed: true } | FinalExecutionFailure;
+  try { verification = await ports.verifySigned(raw, transaction, input.operator); }
+  catch { verification = { passed: false, stage: 'SIGNATURE_VERIFY', reason: 'VERIFICATION_EXCEPTION' }; }
+  const failure: FinalExecutionFailure | null = verification === true ||
+    (typeof verification === 'object' && verification.passed) ? null :
+    verification === false ? { passed: false, stage: 'SIGNATURE_VERIFY', reason: 'SIGNED_TRANSACTION_MISMATCH' } :
+      verification as FinalExecutionFailure;
+  if (failure) {
     await appendExecutionState(ledger, input.intentId, input.planHash, 'BLOCKED_PRE_BROADCAST', null);
-    return { ...base, state: 'BLOCKED',
-      reasons: ['Signed transaction verification or final preflight failed; no broadcast'] };
+    return { ...base, state: 'BLOCKED', diagnostic: failure,
+      reasons: [`${failure.stage}: ${failure.reason}; no broadcast`] };
   }
   const signedHash = keccak256(raw);
   await appendExecutionState(ledger, input.intentId, input.planHash, 'SIGNED', signedHash);
