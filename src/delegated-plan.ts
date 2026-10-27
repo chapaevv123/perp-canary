@@ -71,7 +71,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
   try { nonMarketable = integrity.status === 'TRUSTED' && (input.side === 'BUY' ?
     parseUnits(input.price, 18) < BigInt(top!.bestAskRaw) :
     parseUnits(input.price, 18) > BigInt(top!.bestBidRaw)); } catch { /* Fail closed. */ }
-  const checks = { chain: observation.chainId === 50383 && unsigned?.chainId === 50383,
+  const checks = { chain: observation.chainId === 50383 && (!unsigned || unsigned.chainId === 50383),
     market: integrity.status === 'TRUSTED' && observation.market === 'BTC-PERP' && same(observation.pool, BTC_POOL) &&
       observation.marketSupported.status === 'SUPPORTED' && /^\d+$/.test(observation.markPriceRaw) &&
       BigInt(observation.markPriceRaw) > 0n && /^-?\d+$/.test(observation.positionSizeRaw),
@@ -91,18 +91,24 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
         quantity: input.quantity, expiresAt: unsigned.expiresAt, executionMode: input.executionMode }),
   };
   const blockers = [...observation.planBlockers];
+  if (!unsigned) blockers.push('Unsigned transaction unavailable; dependent checks NOT_RUN');
   if (integrity.status !== 'TRUSTED')
     blockers.push(`UNTRUSTED_MARKET_SNAPSHOT: ${integrity.reasons.join(', ')}`);
   try {
     if (positionEffect(input.side, input.quantity, observation.positionSizeRaw).kind === 'REDUCE_OR_FLIP')
       blockers.push('Opposite-side PLACE could reduce or flip an existing position; CLOSE_POSITION remains blocked');
   } catch { blockers.push('Position effect unavailable'); }
-  for (const [name, passed] of Object.entries(checks)) if (!passed) blockers.push(`${name} gate failed`);
+  const gasMeasured = /^\d+$/.test(observation.estimatedGasUnits) && /^\d+$/.test(observation.gasPriceWei);
+  const notRun = !unsigned ? new Set([...(!gasMeasured ? ['gas'] : []),
+    ...(observation.simulation.status === 'UNKNOWN' ? ['simulation'] : []),
+    'fresh', 'targetAndCalldata']) : new Set<string>();
+  for (const [name, passed] of Object.entries(checks))
+    if (!passed && !notRun.has(name)) blockers.push(`${name} gate failed`);
   if (postOnly && !nonMarketable) blockers.push('PostOnly order is marketable or book snapshot is stale');
   const failure = observation.simulationFailure as SimulationFailure | null;
   const diagnostic = failure ? {
     primaryError: failure.contractError ?? `${failure.category}: ${failure.details}`,
-    blockedDependencies: !unsigned ? ['chain', 'gas', 'simulation', 'fresh', 'targetAndCalldata'] : ['simulation'],
+    blockedDependencies: [...notRun],
     failure, nextAction: failure.nextAction,
   } : undefined;
   const body = { schema: 'perp-canary/delegated-plan/v2' as const,

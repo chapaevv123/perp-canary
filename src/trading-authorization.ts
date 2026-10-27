@@ -54,6 +54,18 @@ const positive = (value: string, decimals: number, label: string): bigint => {
 export type AuthorizationInput = { eoa?: string; tradingWallet?: string; operator?: string; pool?: string;
   side?: 'BUY' | 'SELL'; price?: string; quantity?: string; executionMode?: 'IOC' | 'POST_ONLY' };
 export type AuthorizationDecision = { status: 'BLOCKED' | 'UNKNOWN'; blockers: string[]; nextStep: string };
+export type MarginPreviewDiagnostic = { status: 'NOT_RUN' | 'READ_ERROR' } |
+  { status: 'UNPRICEABLE'; asOfBlock: string } |
+  { status: 'OK'; asOfBlock: string; sufficient: boolean; hasCollateralForLock: boolean;
+    meetsInitialMargin: boolean; voucherBlocked: boolean; restrictedBlocked: boolean;
+    isolationBlocked: boolean; lockAmountRaw: string; unlockedCollateralRaw: string;
+    equityRaw: string; imRequirementRaw: string; increasingQuantityRaw: string;
+    reducingQuantityRaw: string };
+export type MaxPlaceableDiagnostic = { status: 'NOT_RUN' | 'READ_ERROR' } |
+  { status: 'UNPRICEABLE'; asOfBlock: string } |
+  { status: 'OK'; asOfBlock: string; placeable: boolean; maxQuantityRaw: string;
+    requestedQuantityRaw: string; limitedBy: string; positionSizeRaw: string;
+    minQuantityRaw: string; lotSizeRaw: string };
 export function decideAuthorization(input: { chainId: number; marketSupported: boolean | null; registryMatches: boolean | null;
   placeAuthorized: boolean | null; gasWei: bigint | null; requiredGasWei: bigint | null;
   sufficientMargin: boolean | null; signerControlled: boolean; asOf: number; now: number;
@@ -160,6 +172,8 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
     let observedGasPriceWei: bigint | null = null;
     let enoughMargin: boolean | null = null;
     let simulationFailure: SimulationFailure | null = null;
+    let marginPreview: MarginPreviewDiagnostic = { status: 'NOT_RUN' };
+    let maximumPlaceable: MaxPlaceableDiagnostic = { status: 'NOT_RUN' };
     if (input.price && input.quantity && input.side && market) {
       const price = positive(input.price, market.quoteDecimals, 'price');
       const quantity = positive(input.quantity, market.baseDecimals, 'quantity');
@@ -182,6 +196,23 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
           sdk.client.getMaxPerpOrderSize({ pool, marginBank: market.marginBank,
             account: owner, isBid: input.side === 'BUY', price }).catch(() => null),
         ]);
+        marginPreview = !preview ? { status: 'READ_ERROR' } : !preview.priceable ?
+          { status: 'UNPRICEABLE', asOfBlock: preview.asOfBlock.toString() } :
+          { status: 'OK', asOfBlock: preview.asOfBlock.toString(), sufficient: preview.sufficient,
+            hasCollateralForLock: preview.hasCollateralForLock,
+            meetsInitialMargin: preview.meetsInitialMargin, voucherBlocked: preview.voucherBlocked,
+            restrictedBlocked: preview.restrictedBlocked, isolationBlocked: preview.isolationBlocked,
+            lockAmountRaw: preview.lockAmount.toString(),
+            unlockedCollateralRaw: preview.unlockedCollateral.toString(), equityRaw: preview.equity.toString(),
+            imRequirementRaw: preview.imRequirement.toString(),
+            increasingQuantityRaw: preview.increasingQuantity.toString(),
+            reducingQuantityRaw: preview.reducingQuantity.toString() };
+        maximumPlaceable = !maximum ? { status: 'READ_ERROR' } : !maximum.priceable ?
+          { status: 'UNPRICEABLE', asOfBlock: maximum.asOfBlock.toString() } :
+          { status: 'OK', asOfBlock: maximum.asOfBlock.toString(), placeable: maximum.placeable,
+            maxQuantityRaw: maximum.maxQuantity.toString(), requestedQuantityRaw: quantity.toString(),
+            limitedBy: maximum.limitedBy, positionSizeRaw: maximum.positionSize.toString(),
+            minQuantityRaw: maximum.minQuantity.toString(), lotSizeRaw: maximum.lotSize.toString() };
         enoughMargin = preview?.priceable === true ? preview.sufficient : null;
         if (enoughMargin !== true) planBlockers.push('Margin preview did not establish sufficient collateral');
         if (maximum?.priceable !== true || !maximum.placeable || quantity > maximum.maxQuantity)
@@ -237,6 +268,7 @@ export async function inspectTradingAuthorization(input: AuthorizationInput) {
       gasPriceWei: observedGasPriceWei?.toString() ?? 'UNKNOWN',
       requiredGasWei: requiredGasWei?.toString() ?? 'UNKNOWN',
       marginSufficient: enoughMargin,
+      marginPreview, maximumPlaceable,
       positionSizeRaw: position?.size.toString() ?? 'UNKNOWN',
       registry: registryRead ?? 'UNKNOWN', registryMatches: check(registryMatches, AUTH_SOURCES.perps), permissions: grants,
       revokeCapability: { status: 'SUPPORTED', value: 'Owner can revoke bot permissions in dreamDEX Bots tab; no revoke call is made', source: AUTH_SOURCES.bot },

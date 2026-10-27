@@ -9,6 +9,7 @@ import { ownerBuyLimitReasons, priceReport } from './first-proof.ts';
 import { buildPreparedPlan } from './delegated-plan.ts';
 import { appendBotPlanEvidence } from './bot-evidence.ts';
 import { loadExecutableBotPlan } from './bot-plan-loader.ts';
+import { summarizePreflightBlockers } from './preflight-blocker-diagnostics.ts';
 
 const runFile = promisify(execFile);
 const mode = process.argv[2];
@@ -50,7 +51,10 @@ try {
     } else {
       const plan = buildPreparedPlan(observation, input);
       if (plan.status !== 'PREPARED') {
-        console.log(JSON.stringify({ status: 'BLOCKED', blockers: plan.blockers,
+        console.log(JSON.stringify({ status: 'BLOCKED', selectedPrice: selected, quantity,
+          sampledBlock: observation.sampledBlock, observedAt: observation.observedAt,
+          blockers: plan.blockers,
+          preflight: summarizePreflightBlockers(observation, plan),
           marketIntegrity: observation.marketIntegrity, bestBidRaw: observation.bookTops.bestBidRaw,
           bestAskRaw: observation.bookTops.bestAskRaw, transactionSent: 'NO',
           action: 'Market or preflight changed. Start canary-first-proof again; no price is changed automatically.' }, null, 2));

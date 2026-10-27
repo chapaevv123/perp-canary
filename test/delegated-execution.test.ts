@@ -18,6 +18,7 @@ import { RPC } from '../src/rpc-health.ts';
 import { BOOK_SOURCE } from '../src/market-integrity.ts';
 import { sha256 } from '../src/evidence.ts';
 import type { inspectTradingAuthorization } from '../src/trading-authorization.ts';
+import { summarizePreflightBlockers } from '../src/preflight-blocker-diagnostics.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 const BOT = '0xA8ad1E44f4D74EF1fCDf479A97D54e6Bdf6fBE36';
@@ -110,9 +111,50 @@ test('IOC no-fill revert is primary; absent unsigned transaction explains depend
   assert.equal(p.checks.permission, true);
   assert.equal(p.checks.margin, true);
   assert.equal(p.diagnostic?.primaryError, 'ImmediateOrCancelNoFill()');
-  assert.deepEqual(p.diagnostic?.blockedDependencies, ['chain', 'gas', 'simulation', 'fresh', 'targetAndCalldata']);
+  assert.deepEqual(p.diagnostic?.blockedDependencies, ['gas', 'fresh', 'targetAndCalldata']);
   assert.equal(p.diagnostic?.failure.bestAsk, '80024.9');
   assert.doesNotThrow(() => verifyPreparedPlan(p));
+});
+test('margin preview failure reports exact gate while dependent checks remain NOT_RUN', () => {
+  const o = observation({ unsigned: null, marginSufficient: false,
+    estimatedGasUnits: 'UNKNOWN', gasPriceWei: 'UNKNOWN',
+    simulation: { status: 'UNKNOWN' },
+    marginPreview: { status: 'OK', asOfBlock: '34017211', sufficient: false,
+      hasCollateralForLock: true, meetsInitialMargin: false, voucherBlocked: false,
+      restrictedBlocked: false, isolationBlocked: false, lockAmountRaw: '1',
+      unlockedCollateralRaw: '1000', equityRaw: '1000', imRequirementRaw: '2000',
+      increasingQuantityRaw: '100000', reducingQuantityRaw: '0' },
+    maximumPlaceable: { status: 'READ_ERROR' },
+    planBlockers: ['Margin preview did not establish sufficient collateral',
+      'SDK maximum placeable size unavailable or exceeded'] });
+  const p = buildPreparedPlan(o, input);
+  const report = summarizePreflightBlockers(o, p);
+  assert.equal(p.status, 'BLOCKED');
+  assert.deepEqual(report.primaryFailures, ['MARGIN_PREVIEW_initialMarginNotMet', 'MAX_PLACEABLE_READ_ERROR']);
+  assert.equal(report.gates.chain, 'PASS');
+  assert.equal(report.gates.margin, 'FAILED');
+  assert.equal(report.gates.gas, 'NOT_RUN');
+  assert.equal(report.gates.simulation, 'NOT_RUN');
+  assert.equal(report.gates.fresh, 'NOT_RUN');
+  assert.equal(report.gates.targetAndCalldata, 'NOT_RUN');
+  assert.ok(!p.blockers.some(reason => /(?:chain|gas|simulation|fresh|targetAndCalldata) gate failed/.test(reason)));
+  assert.doesNotThrow(() => verifyPreparedPlan(p));
+});
+test('measured gas shortage remains FAILED even when unsigned calldata was discarded', () => {
+  const o = observation({ unsigned: null, operatorGasStt: '0',
+    planBlockers: ['Operator lacks simulated gas cost'],
+    marginPreview: { status: 'NOT_RUN' }, maximumPlaceable: { status: 'NOT_RUN' } });
+  const p = buildPreparedPlan(o, input);
+  const report = summarizePreflightBlockers(o, p);
+  assert.equal(report.gates.gas, 'FAILED');
+  assert.ok(p.blockers.includes('gas gate failed'));
+  assert.equal(report.gates.targetAndCalldata, 'NOT_RUN');
+});
+test('missing unsigned transaction can never become PREPARED even when other values pass', () => {
+  const p = buildPreparedPlan(observation({ unsigned: null }), input);
+  assert.equal(p.status, 'BLOCKED');
+  assert.equal(p.transaction, null);
+  assert.ok(p.blockers.some(reason => reason.startsWith('Unsigned transaction unavailable')));
 });
 test('non-contract RPC failure is not mislabelled as IOC no-fill', () => {
   const failure = classifySimulationFailure({ cause: { code: -32000, details: 'upstream unavailable' } });
