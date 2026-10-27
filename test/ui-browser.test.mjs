@@ -214,25 +214,63 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
   } finally { await context.close(); }
 });
 
-test('real Chromium: responsive layout has no overlap or horizontal overflow', async () => {
+test('real Chromium: wide and responsive layout, typography and panel geometry', async () => {
   const { context, page, errors } = await fixturePage();
   try {
     mkdirSync('test-results', { recursive: true });
-    for (const width of [1920, 1440, 1366, 1280, 768]) {
-      await page.setViewportSize({ width, height: 900 });
+    for (const [width, height] of [[2560, 1440], [1920, 1080], [1600, 900], [1440, 900],
+      [1366, 768], [1280, 800], [768, 1024]]) {
+      await page.setViewportSize({ width, height });
       const layout = await page.evaluate(() => {
         const rect = selector => document.querySelector(selector).getBoundingClientRect();
         const [brand, nav, status] = ['.brand', '.topbar nav', '.top-status'].map(rect);
         const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        const font = selector => parseFloat(window.getComputedStyle(document.querySelector(selector)).fontSize);
+        const shell = rect('.shell'), chart = rect('.chart-panel'), book = rect('.book-panel');
+        const trade = rect('.trade-panel'), risk = rect('.risk-panel'), portfolio = rect('.portfolio-panel');
+        const proof = rect('.proof-panel');
         return { width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth,
           brandNav: intersects(brand, nav), brandStatus: intersects(brand, status), navStatus: intersects(nav, status),
-          brandVisible: brand.width > 100 && brand.height > 20 };
+          brandVisible: brand.width > 100 && brand.height > 20,
+          shell: shell.width, shellLeft: shell.left, headerLeft: brand.left,
+          fonts: { body: font('body'), secondary: font('.small'), button: font('.button'),
+            input: font('.field input'), price: font('.metric strong'), heading: font('.panel-head h2') },
+          chart: { x: chart.x, y: chart.y, width: chart.width },
+          book: { x: book.x, y: book.y, width: book.width },
+          trade: { x: trade.x, y: trade.y, width: trade.width },
+          risk: { x: risk.x, y: risk.y }, portfolio: { x: portfolio.x, y: portfolio.y },
+          proof: { x: proof.x, y: proof.y },
+          tableFits: document.querySelector('.table-wrap').scrollWidth <=
+            document.querySelector('.table-wrap').clientWidth,
+          proofFits: document.querySelector('.proof-panel').scrollWidth <= proof.width + 1,
+        };
       });
       assert.equal(layout.scrollWidth <= layout.width, true, `horizontal overflow at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandNav || layout.brandStatus || layout.navStatus, false, `header overlap at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandVisible, true);
-      if (width === 1440 || width === 768)
+      assert.ok(layout.shell >= width * .94 && layout.shell <= width * .96,
+        `shell width at ${width}: ${JSON.stringify(layout)}`);
+      assert.ok(layout.fonts.body >= 15 && layout.fonts.secondary >= 12 && layout.fonts.button >= 14 &&
+        layout.fonts.input >= 15 && layout.fonts.price >= 22 && layout.fonts.heading >= 17,
+      `typography at ${width}: ${JSON.stringify(layout.fonts)}`);
+      assert.ok(layout.chart.width > 300 && layout.book.width > 300 && layout.trade.width > 300,
+        `panel width at ${width}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.tableFits && layout.proofFits, true, `table or hash overflow at ${width}: ${JSON.stringify(layout)}`);
+      if (width >= 1600) {
+        assert.ok(layout.chart.x < layout.book.x && layout.book.x < layout.trade.x &&
+          Math.abs(layout.chart.y - layout.book.y) < 2 && Math.abs(layout.book.y - layout.trade.y) < 2,
+        `desktop panel order at ${width}: ${JSON.stringify(layout)}`);
+      } else if (width >= 901) {
+        assert.ok(layout.chart.x < layout.book.x && layout.risk.x < layout.trade.x &&
+          layout.portfolio.x < layout.proof.x, `laptop panel order at ${width}: ${JSON.stringify(layout)}`);
+      } else {
+        assert.ok(layout.chart.y < layout.book.y && layout.book.y < layout.trade.y &&
+          layout.trade.y < layout.risk.y && layout.risk.y < layout.portfolio.y &&
+          layout.portfolio.y < layout.proof.y, `tablet panel order at ${width}: ${JSON.stringify(layout)}`);
+      }
+      if (width === 1920 || width === 2560 || width === 768)
         await page.screenshot({ path: `test-results/ui-qa-${width}.png`, fullPage: true });
+      if (width === 1920 || width === 2560) process.stdout.write(`QA layout ${JSON.stringify(layout)}\n`);
     }
     assert.deepEqual(errors, []);
   } finally { await context.close(); }

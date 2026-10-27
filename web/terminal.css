@@ -8,3 +8,67 @@
 @media(max-width:850px){.network em{display:none}.top-status{gap:5px}.pill{padding:6px 7px;font-size:9px}.summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.topbar{padding-left:18px;padding-right:18px}}
 @media(max-width:760px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar nav{order:3}.top-status{margin-left:auto}.brand{flex:0 0 auto}}
 @media(max-width:550px){.brand{width:100%}.top-status{order:2;margin-left:0;max-width:100%;flex-wrap:wrap}.topbar nav{order:3}.page-head{padding-top:20px}.chart-foot{gap:6px 12px}}
+
+/* M4.4: use the display width for the working panels while keeping text readable. */
+:root{font-size:16px;line-height:1.45}
+.shell{width:95%;max-width:none;padding:0;margin-inline:auto}
+.topbar{padding-inline:2.5%;gap:clamp(20px,2.4vw,54px)}
+.brand{font-size:17px}.brand small{font-size:12px}.brandmark{width:40px;height:40px;flex-basis:40px;font-size:14px}
+.topbar nav{gap:clamp(16px,1.8vw,34px)}.topbar nav a{font-size:14px}
+.network,.pill,.badge,.read-only{font-size:12px}.pill{padding:9px 12px}
+.page-head{padding:27px 0 22px}.page-head h1{font-size:clamp(30px,2vw,38px)}
+.page-head p{font-size:15px}.eyebrow{font-size:12px}.button{font-size:14px;padding:10px 15px}
+.summary-grid{gap:14px;margin-bottom:14px}.metric{padding:17px 20px;min-height:108px}
+.metric label,.metric span{font-size:12px}.metric strong{font-size:clamp(22px,1.35vw,28px)}
+.main-grid{grid-template-columns:minmax(0,1.85fr) minmax(330px,1fr) minmax(370px,1.12fr);gap:14px;align-items:start}
+.panel{padding:22px}.panel-head{margin-bottom:18px}.panel-head h2{font-size:19px}
+.chart-panel,.book-panel{min-height:520px}.chart-wrap{height:clamp(340px,22vw,510px)}
+.chart-empty{font-size:14px;max-width:390px}.chart-foot,.chart-source{font-size:12px}
+.axis-label{font-size:12px}.segmented .active{font-size:12px;padding:5px 11px}
+.small,.control-note{font-size:12px}.book-labels{font-size:12px}.book-row{font-size:14px;padding:18px 13px}.book-row strong{font-size:18px}
+.book-spread,.book-info,.depth-row{font-size:12px}.depth-row{padding:8px 13px}
+.side-switch button{font-size:14px;padding:12px}.form-row,.field{font-size:14px}
+.form-row select{font-size:14px;padding:8px 11px}.field input{font-size:16px;padding:12px}
+.quick-actions button,.offsets button,.proof-actions button{font-size:14px;padding:9px 10px}
+.offset-label{font-size:12px}.trade-facts div{font-size:14px}.trade-callout{font-size:13px}
+.trade-error{font-size:12px}.prepare-command span{font-size:12px}.prepare-command code{font-size:13px}
+.risk-intro,.risk-note{font-size:13px}.gate-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.gate{font-size:13px;padding:11px;min-width:0}.gate strong{font-size:12px;overflow-wrap:anywhere}
+.position-row span,th,.proof-list dt{font-size:12px}.position-row strong{font-size:clamp(20px,1.5vw,26px)}
+table,.timeline li,.proof-list dd,.proof-events{font-size:13px}.proof-list button{font-size:14px}
+h3,.proof-lead strong{font-size:15px}.proof-lead span{font-size:12px}
+.proof-list div{grid-template-columns:minmax(105px,.6fr) minmax(0,2fr) auto;gap:12px}
+footer{font-size:12px;gap:18px}
+
+@media(max-width:1600px){
+  .main-grid{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr) minmax(340px,1.1fr)}
+  .chart-panel,.book-panel{min-height:450px}.chart-wrap{height:345px}
+  .gate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:1450px){
+  .topbar{gap:12px 20px;flex-wrap:wrap;padding-block:12px 0}
+  .topbar nav{order:3;flex:1 0 100%;height:40px;justify-content:flex-start;overflow-x:auto}
+  .topbar nav a{height:40px}.top-status{order:2;margin-left:auto}.brand{order:1}
+  .main-grid{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+  .chart-panel{grid-column:1;grid-row:1}.book-panel{grid-column:2;grid-row:1}
+  .risk-panel{grid-column:1;grid-row:2}.trade-panel{grid-column:2;grid-row:2}
+  .portfolio-panel{grid-column:1;grid-row:3}.proof-panel{grid-column:2;grid-row:3}
+  .chart-panel,.book-panel{min-height:440px}.chart-wrap{height:330px}
+  .proof-list div{grid-template-columns:minmax(100px,.6fr) minmax(0,2fr) auto}
+}
+@media(max-width:900px){
+  .shell{width:calc(100% - 36px)}.topbar{padding-inline:18px}
+  .summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .main-grid{display:block}.panel{margin-bottom:14px}
+  .chart-panel,.book-panel{min-height:0}.chart-wrap{height:300px}
+  .gate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .page-head{align-items:flex-start;flex-direction:column}.head-actions{width:100%;justify-content:space-between}
+}
+@media(max-width:550px){
+  .shell{width:calc(100% - 28px)}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .metric{padding:14px}.panel{padding:17px}.chart-wrap{height:250px}
+  .topbar nav{gap:16px}.top-status{margin-left:0}.position-row{grid-template-columns:1fr 1fr}
+  .proof-list div{grid-template-columns:minmax(90px,.55fr) minmax(0,1fr);gap:7px}
+  .proof-list button{grid-column:2;justify-self:start;padding:2px 0}
+  footer{flex-wrap:wrap}
+}

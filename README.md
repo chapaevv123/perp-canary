@@ -56,4 +56,4 @@ git diff --check
 
 `verify` checks local evidence chains and proof artifacts. These commands do not sign or send a transaction.
 
-`test:ui` launches installed Chromium, Edge or Chrome against the local server. It checks controls, clipboard, chart rendering, error and stale states, `/legacy`, and responsive widths 1920, 1440, 1366, 1280 and 768 px. For an additional live Hideki browser smoke test, set the task-specific `CANARY_UI_LIVE=1` environment variable in PowerShell before running `npm.cmd run test:ui`; this needs read-only outbound RPC/SDK access. Screenshots are written to ignored `test-results/`.
+`test:ui` launches installed Chromium, Edge or Chrome against the local server. It checks controls, clipboard, chart rendering, error and stale states, `/legacy`, and layout at 2560×1440, 1920×1080, 1600×900, 1440×900, 1366×768, 1280×800 and 768×1024. Desktop screenshots are written to ignored `test-results/`. For an additional live Hideki browser smoke test, set the task-specific `CANARY_UI_LIVE=1` environment variable in PowerShell before running `npm.cmd run test:ui`; this needs read-only outbound RPC/SDK access.
