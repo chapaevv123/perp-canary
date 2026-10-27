@@ -136,6 +136,7 @@ button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-
 .guard-card p{margin:0;color:#c0cbda;font-size:13px;line-height:1.5}
 .review-card{margin:14px 0;padding:15px;border:1px solid #7062aa;border-radius:7px;background:#1e2332}
 .review-card h3{font-size:17px;margin:0 0 10px}.review-card p{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.review-card code{display:block;font-size:11px;color:#c8c3ff;overflow-wrap:anywhere;max-height:90px;overflow:auto;margin-bottom:11px}
 .review-actions{display:flex;gap:8px;flex-wrap:wrap}.review-actions button{flex:1 1 150px}
 .wallet-result{min-height:22px;color:#afbbcb;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
 .wallet-result[data-kind="error"]{color:#ff9eac}.wallet-result[data-kind="warn"]{color:#ffd397}.wallet-result[data-kind="ok"]{color:#70e4b6}
@@ -165,3 +166,11 @@ button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-
 @media(max-width:450px){.sizing-fields{grid-template-columns:1fr}}
 @media(max-width:1450px){.top-status{flex-wrap:wrap;justify-content:flex-end}}
 @media(max-width:550px){.top-status{justify-content:flex-start}.page-head>div{width:100%;min-width:0}.market-picker{align-items:flex-start;flex-direction:column;gap:4px;min-width:0}.market-picker select{width:100%;min-width:0;max-width:100%;font-size:18px}}
+.wallet-details{position:absolute;z-index:40;right:2.5%;top:68px;width:min(590px,95vw);max-height:calc(100vh - 80px);overflow:auto;padding:20px;background:#202736;border:1px solid #5b6479;border-radius:10px;box-shadow:0 18px 55px #0009;font-size:13px}
+.wallet-details[hidden]{display:none}.wallet-details-head,.wallet-details-actions{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap}
+.wallet-details-head strong{font-size:17px}.wallet-details dl{margin:16px 0}.wallet-details dl div{display:grid;grid-template-columns:155px minmax(0,1fr);gap:8px;padding:6px 0;border-bottom:1px solid #384252}
+.wallet-details dt{color:#9aa8bd}.wallet-details dd{margin:0;overflow-wrap:anywhere}.wallet-details p{line-height:1.5;color:#b7c2d3}
+.wallet-details .button{display:inline-block}.wallet-details a.button{text-decoration:none}
+.testnet-funding{border-top:1px solid #4b5366;margin-top:17px;padding-top:12px}.testnet-funding h2{font-size:16px;margin:0 0 8px}
+#wallet-identity-warning[data-kind="warn"],#funding-remediation[data-kind="warn"]{color:#ffbf69}
+@media(max-width:1450px){.wallet-details{top:75px}}@media(max-width:550px){.wallet-details{right:2.5%;top:100px}.wallet-details dl div{grid-template-columns:1fr}}

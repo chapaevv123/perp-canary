@@ -108,7 +108,19 @@ async function fixturePage(initScript) {
   await page.route('**/api/v1/terminal/plan', route => route.fulfill({
     contentType: 'application/json; charset=utf-8', body: JSON.stringify(plan),
   }));
+  await page.route('**/api/v1/wallet/identity?**', route => route.fulfill({ json: {
+    account: new URL(route.request().url()).searchParams.get('account') } }));
+  await page.route('**/api/v1/wallet/funding?**', route => route.fulfill({ json: {
+    account: new URL(route.request().url()).searchParams.get('account'), chainId: 50383,
+    block: '123', nativeStt: '1', nativeSttWei: '1000000000000000000',
+    walletUsdso: '100', marginFreeUsdso: '50', marginWithdrawableUsdso: '10',
+    voucher: { claimed: true, floorUsdso: '0' }, btcVoucherAllowed: true,
+    eligibility: { eligible: false, reason: 'alreadyClaimed' } } }));
+  await page.route('**/api/v1/wallet/embedded-ownership', route => route.fulfill({ json: {
+    account: '0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f',
+    threshold: '1', metaMaskIsOwner: false } }));
   await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.locator('#historical-tools').click();
   await page.locator('#proof-badge').getByText('VERIFIED').waitFor();
   await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor();
   return { context, page, errors,
@@ -220,11 +232,11 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#chart-empty').isHidden(), true);
     assert.notEqual(await page.locator('#chart-y-high').textContent(), '--');
     assert.notEqual(await page.locator('#chart-x-end').textContent(), '--');
-    await page.locator('nav a[href="#risk"]').click();
+    await page.evaluate(() => { window.location.hash = '#risk'; });
     assert.equal(new URL(page.url()).hash, '#risk');
-    await page.locator('nav a[href="#portfolio"]').click();
+    await page.evaluate(() => { window.location.hash = '#portfolio'; });
     assert.equal(new URL(page.url()).hash, '#portfolio');
-    await page.locator('nav a[href="#proof"]').click();
+    await page.evaluate(() => { window.location.hash = '#proof'; });
     assert.equal(new URL(page.url()).hash, '#proof');
     await page.locator('nav a[href="#market"]').click();
     assert.equal(new URL(page.url()).hash, '#market');
@@ -258,18 +270,19 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     const wallet = '0x1111111111111111111111111111111111111111';
     const hash = `0x${'a'.repeat(64)}`;
     const listeners = {};
-    window.__walletMock = { chain: '0xc4cf', account: wallet, sends: 0, reject: false,
+    window.__walletMock = { chain: '0xc4cf', account: wallet, sends: 0, reject: false, lastTx: null,
       changeAccount(value) { this.account = value; listeners.accountsChanged?.([value]); },
       changeChain(value) { this.chain = value; listeners.chainChanged?.(value); } };
     window.ethereum = {
       on(name, callback) { listeners[name] = callback; },
       removeListener(name) { delete listeners[name]; },
-      async request({ method }) {
+      async request({ method, params }) {
         if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [window.__walletMock.account];
         if (method === 'eth_chainId') return window.__walletMock.chain;
         if (method === 'wallet_switchEthereumChain') { window.__walletMock.changeChain('0xc4cf'); return null; }
         if (method === 'eth_sendTransaction') {
           window.__walletMock.sends++;
+          window.__walletMock.lastTx = params[0];
           if (window.__walletMock.reject) throw Error('User rejected request');
           return hash;
         }
@@ -279,7 +292,8 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
   });
   let prepareStatus = 'READY', receiptState = 'PENDING', prepareCalls = 0;
   const tx = { chainId: 50383, from: account, to: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0',
-    data: '0x4e978373', value: '0x0', gas: '0x5208', expiresAt: new Date(Date.now() + 280000).toISOString(),
+    data: '0x4e978373', value: '0x0', gas: '0x5208', nonce: 0,
+    expiresAt: new Date(Date.now() + 280000).toISOString(),
     maxGasCostStt: '0.001' };
   try {
     await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: { account, gasStt: '1',
@@ -304,6 +318,12 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     assert.equal(await page.locator('#review-order').isDisabled(), true);
     await page.locator('#wallet-connect').click();
     await page.locator('#wallet-state').getByText(/Hideki 50383/).waitFor();
+    assert.match(await page.locator('#wallet-identity').textContent(), /0x1111/);
+    await page.locator('#wallet-identity').click();
+    await page.locator('#wallet-full-address').getByText(account).waitFor();
+    await page.locator('#wallet-identity-warning').getByText(/ACCOUNT MISMATCH/).waitFor();
+    assert.match(await page.locator('#wallet-native-stt').textContent(), /1 STT/);
+    await page.locator('#wallet-details-close').click();
     await page.locator('#quantity').fill('0.00013');
     await page.locator('#use-bid').click();
     prepareStatus = 'BLOCKED';
@@ -333,6 +353,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     assert.match(await page.locator('#trade-review-summary').textContent(), /Order #789/);
     assert.match(await page.locator('.wallet-journal').last().textContent(), /no model service is connected/);
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
+    assert.equal(await page.evaluate(() => window.__walletMock.lastTx.nonce), '0x0');
     assert.ok(prepareCalls >= 4);
     await page.locator('#action-amount').fill('10');
     await page.locator('#review-action').click();
@@ -363,9 +384,72 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
 test('real Chromium: missing injected wallet cannot review or submit', async () => {
   const { context, page, errors } = await fixturePage();
   try {
+    await page.locator('#historical-tools').click();
+    assert.equal(await page.locator('#risk').isHidden(), true);
+    await page.locator('#nav-funding').click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'wallet-connect');
     await page.locator('#wallet-connect').click();
     assert.match(await page.locator('#wallet-result').textContent(), /No injected EIP-1193 wallet/);
     assert.equal(await page.locator('#review-order').isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: funding identity, no gas, voucher review and rejected signature', async () => {
+  const account = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
+  const { context, page, errors } = await fixturePage(() => {
+    const listeners = {};
+    window.__fundingWallet = { account: '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42',
+      chain: '0xc4cf', sends: 0, reject: true, lastTx: null };
+    window.ethereum = { isMetaMask: true,
+      on(name, callback) { listeners[name] = callback; },
+      removeListener(name) { delete listeners[name]; },
+      async request({ method, params }) {
+        if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [window.__fundingWallet.account];
+        if (method === 'eth_chainId') return window.__fundingWallet.chain;
+        if (method === 'eth_sendTransaction') { window.__fundingWallet.sends++;
+          window.__fundingWallet.lastTx = params[0];
+          if (window.__fundingWallet.reject) throw Error('User rejected request');
+          return `0x${'b'.repeat(64)}`; }
+        throw Error(`Unexpected wallet method ${method}`);
+      },
+    };
+  });
+  let gas = '0', eligible = true;
+  const tx = { chainId: 50383, from: account, to: '0x2ACD9EFdA721450906bfE1bef3edE269636E42C4',
+    data: '0x4e71d92d', value: '0x0', gas: '0x100000', nonce: 0, maxGasCostStt: '0.003' };
+  try {
+    await page.route('**/api/v1/wallet/funding?**', route => route.fulfill({ json: {
+      account, chainId: 50383, block: '123', nativeStt: gas,
+      nativeSttWei: gas === '0' ? '0' : '1000000000000000000', walletUsdso: '0',
+      marginFreeUsdso: '0', marginWithdrawableUsdso: '0', voucher: { claimed: false, floorUsdso: '0' },
+      btcVoucherAllowed: true, eligibility: eligible ? { eligible: true, grantUsdso: '1000' } :
+        { eligible: false, reason: 'alreadyClaimed' } } }));
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: {
+      account, market: 'BTC-PERP', block: '123', gasStt: gas, walletUsdso: '0',
+      allowance: '0', marginUnlocked: '0', withdrawable: '0',
+      position: { size: '0', entryPrice: '0' }, openOrders: [] } }));
+    await page.route('**/api/v1/wallet/voucher/prepare', route => route.fulfill({ json: {
+      status: 'READY_FOR_OWNER_CONFIRMATION', account, grantUsdso: '1000', transaction: tx } }));
+    await page.locator('#wallet-connect').click();
+    await page.locator('#wallet-identity').click();
+    await page.locator('#wallet-native-stt').getByText('0 STT').waitFor();
+    assert.match(await page.locator('#wallet-identity-warning').textContent(), /External MetaMask EOA/);
+    assert.match(await page.locator('#funding-remediation').textContent(), /Link a Bot/);
+    assert.equal(await page.locator('#review-voucher').isDisabled(), true);
+    eligible = false; gas = '1'; await page.locator('#check-voucher').click();
+    await page.locator('#voucher-eligibility').getByText(/INELIGIBLE/).waitFor();
+    assert.equal(await page.locator('#review-voucher').isDisabled(), true);
+    eligible = true; await page.locator('#check-voucher').click();
+    await page.locator('#voucher-eligibility').getByText(/ELIGIBLE/).waitFor();
+    await page.locator('#review-voucher').click();
+    await page.locator('#voucher-result').getByText(/READY_FOR_OWNER_CONFIRMATION/).waitFor();
+    assert.equal(await page.evaluate(() => window.__fundingWallet.sends), 0);
+    assert.match(await page.locator('#voucher-review-details').textContent(), /nonwithdrawable paper USDso/);
+    await page.locator('#confirm-voucher').click();
+    await page.locator('#voucher-result').getByText(/User rejected request/).waitFor();
+    assert.equal(await page.evaluate(() => window.__fundingWallet.sends), 1);
+    assert.equal(await page.evaluate(() => window.__fundingWallet.lastTx.nonce), '0x0');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
@@ -532,6 +616,7 @@ test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1'
   page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.locator('#historical-tools').click();
     await page.locator('#proof-badge').getByText('VERIFIED').waitFor({ timeout: 15000 });
     await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor({ timeout: 90000 });
     await page.locator('#order-state').getByText('NOT_OPEN_AT_READ').waitFor({ timeout: 90000 });

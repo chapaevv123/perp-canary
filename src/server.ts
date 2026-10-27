@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { getAddress, isAddress } from 'viem';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { appendSnapshot, readSnapshots } from './evidence.ts';
@@ -30,6 +31,8 @@ import { prepareDirectTrade, prepareWalletAction, readDirectAccount, readDirectR
   readWalletActionReceipt, type DirectInput, type WalletActionInput } from './browser-trade.ts';
 import { listVerifiedMarkets, readVerifiedMarket, verifiedMarket } from './market-registry.ts';
 import { assessMarketRadar, calculatePositionSize, type RadarInput } from './canary-intelligence.ts';
+import { prepareVoucherClaim, readEmbeddedOwnership, readVoucherClaimReceipt,
+  readWalletFunding } from './wallet-funding.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -119,6 +122,22 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/api/v1/trade/account') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       json(response, 200, await readDirectAccount(params.get('account') ?? '', params.get('market') ?? undefined));
+    } else if (request.method === 'GET' && path === '/api/v1/wallet/funding') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readWalletFunding(params.get('account') ?? ''));
+    } else if (request.method === 'GET' && path === '/api/v1/wallet/identity') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const account = params.get('account') ?? '';
+      if (!isAddress(account, { strict: false })) throw Error('Invalid wallet address');
+      json(response, 200, { account: getAddress(account) });
+    } else if (request.method === 'GET' && path === '/api/v1/wallet/embedded-ownership') {
+      json(response, 200, await readEmbeddedOwnership());
+    } else if (request.method === 'POST' && path === '/api/v1/wallet/voucher/prepare') {
+      const body = await jsonBody(request);
+      json(response, 200, await prepareVoucherClaim(String(body.account ?? '')));
+    } else if (request.method === 'GET' && path === '/api/v1/wallet/voucher/receipt') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readVoucherClaimReceipt(params.get('hash') ?? '', params.get('account') ?? ''));
     } else if (request.method === 'POST' && path === '/api/v1/trade/prepare') {
       const body = await jsonBody(request);
       if (body.orderType !== 'POST_ONLY' || !['BUY', 'SELL'].includes(String(body.side)))

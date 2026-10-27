@@ -4,7 +4,10 @@
   const $ = id => document.getElementById(id);
   const state = { provider: null, account: null, chainId: null, accountData: null,
     side: 'BUY', market: null, plan: null, busy: false, pendingHash: null, pendingAccount: null,
-    pendingMarket: null, requestId: 0, marketRegistry: [] };
+    pendingMarket: null, requestId: 0, fundingRequestId: 0, marketRegistry: [],
+    funding: null, voucherPlan: null, voucherPending: null };
+  const expectedMetaMask = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
+  const embeddedAccount = '0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f';
   const panel = document.querySelector('.trade-panel');
   panel.querySelector('.eyebrow').textContent = 'DIRECT WALLET TRADING';
   panel.querySelector('h2').textContent = 'Trade BTC-PERP';
@@ -30,7 +33,7 @@
     <button id="review-order" class="button primary full" type="button" disabled>Review wallet order</button>
     <div id="trade-review" class="review-card" hidden>
       <h3>Review direct BTC-PERP order</h3><p id="review-details"></p>
-      <p id="review-risk"></p><p id="review-contract"></p>
+      <p id="review-risk"></p><p id="review-contract"></p><code id="review-calldata"></code>
       <div class="review-actions"><button id="confirm-wallet" class="button primary" type="button">Confirm in wallet</button>
         <button id="dismiss-review" class="button secondary" type="button">Edit order</button></div>
     </div><p id="wallet-result" class="wallet-result" role="status" aria-live="polite"></p>
@@ -103,7 +106,7 @@
   }
   const request = async (url, options) => {
     const controller = new window.AbortController();
-    const timer = setTimeout(() => controller.abort(), 100000);
+    const timer = setTimeout(() => controller.abort(), 60000);
     try { const response = await fetch(url, { cache: 'no-store', signal: controller.signal, ...options });
       const body = await response.json();
       if (!response.ok) throw Error(body.error || `HTTP ${response.status}`);
@@ -129,10 +132,35 @@
   function displayAccount() {
     $('wallet-connect').hidden = !!state.account;
     $('wallet-disconnect').hidden = !state.account;
+    $('wallet-identity').hidden = !state.account;
+    $('wallet-identity').textContent = state.account ? `${state.account.slice(0, 6)}…${state.account.slice(-4)}` : 'Wallet details';
     $('wallet-switch').hidden = !state.account || validChain();
+    text('wallet-full-address', state.account ?? '—');
+    $('wallet-copy-address').disabled = !state.account;
+    if (!state.funding) {
+      for (const id of ['wallet-native-stt', 'wallet-usdso-balance', 'wallet-margin-free',
+        'wallet-margin-withdrawable']) text(id, '—');
+      $('review-voucher').disabled = true; $('voucher-review').hidden = true;
+      text('voucher-eligibility', 'Eligibility not checked.');
+    }
+    text('wallet-network', state.account ? `${validChain() ? 'Somnia Hideki' : 'Wrong network'} · chainId ${state.chainId ?? 'UNKNOWN'}` : '—');
+    const identity = !state.account ? 'Wallet disconnected.' :
+      state.account.toLowerCase() === expectedMetaMask.toLowerCase() ?
+        'External MetaMask EOA. DreamDEX smart-account funds are separate.' :
+        state.account.toLowerCase() === embeddedAccount.toLowerCase() ?
+          'Known dreamDEX smart account address reported by provider. Verify the provider before any action.' :
+          `ACCOUNT MISMATCH: expected MetaMask ${expectedMetaMask}. Trading uses the connected account only.`;
+    text('wallet-identity-warning', identity);
+    $('wallet-identity-warning').dataset.kind = state.account &&
+      state.account.toLowerCase() !== expectedMetaMask.toLowerCase() ? 'warn' : '';
     text('wallet-state', state.account ? `${state.account.slice(0, 6)}…${state.account.slice(-4)} · ${validChain() ? 'Hideki 50383' : 'wrong network'}` :
       'Connect an EIP-1193 wallet to trade directly.');
-    if (!state.account) { text('wallet-balances', 'Wallet balance and MarginBank: not read');
+    if (!state.account) { $('wallet-details').hidden = true; $('wallet-identity').setAttribute('aria-expanded', 'false');
+      state.funding = null; state.voucherPlan = null;
+      for (const id of ['wallet-native-stt', 'wallet-usdso-balance', 'wallet-margin-free',
+        'wallet-margin-withdrawable']) text(id, '—');
+      text('voucher-eligibility', 'Eligibility not checked.'); $('review-voucher').disabled = true;
+      text('wallet-balances', 'Wallet balance and MarginBank: not read');
       text('wallet-position', 'Connect a wallet to read your own position and open orders.');
       $('wallet-orders').replaceChildren(); }
     renderJournal();
@@ -142,7 +170,8 @@
     if (!connected()) return;
     const id = ++state.requestId;
     const selectedMarket = $('market-select').value;
-    text('wallet-balances', 'Reading this wallet’s balances and MarginBank…');
+    text('wallet-balances', 'Reading selected market account (timeout 60 seconds)…');
+    text('wallet-position', 'Reading selected market position and orders…');
     try { const data = await request(`/api/v1/trade/account?account=${encodeURIComponent(state.account)}&market=${encodeURIComponent(selectedMarket)}`);
       if (id !== state.requestId || data.account.toLowerCase() !== state.account.toLowerCase() ||
         selectedMarket !== $('market-select').value) return;
@@ -174,10 +203,43 @@
       }
     } catch (error) { if (id === state.requestId) {
       state.accountData = null; text('wallet-balances', `Account read unavailable: ${error.message}`);
-      text('wallet-position', 'Position and open orders UNKNOWN. Refresh when RPC/SDK is available.');
+      text('wallet-position', 'Position and open orders UNKNOWN. Use Refresh balances or Refresh live data to retry.');
       $('wallet-orders').replaceChildren(); } }
   }
+  async function loadFunding() {
+    if (!connected()) { text('wallet-details-status', 'Switch to Hideki 50383 before reading funding.'); return; }
+    const id = ++state.fundingRequestId, account = state.account;
+    text('wallet-details-status', 'Reading Hideki balances and voucher state (timeout 60 seconds)…');
+    for (const field of ['wallet-native-stt', 'wallet-usdso-balance', 'wallet-margin-free',
+      'wallet-margin-withdrawable']) text(field, 'Reading…');
+    try {
+      const data = await request(`/api/v1/wallet/funding?account=${encodeURIComponent(account)}`);
+      if (id !== state.fundingRequestId || account?.toLowerCase() !== state.account?.toLowerCase()) return;
+      state.funding = data;
+      text('wallet-full-address', data.account);
+      text('wallet-native-stt', `${data.nativeStt} STT`);
+      text('wallet-usdso-balance', `${data.walletUsdso} transferable USDso`);
+      text('wallet-margin-free', `${data.marginFreeUsdso} USDso (includes any paper credit)`);
+      text('wallet-margin-withdrawable', `${data.marginWithdrawableUsdso} USDso`);
+      text('voucher-eligibility', data.eligibility.eligible ?
+        `ELIGIBLE at block ${data.block}: one-time ${data.eligibility.grantUsdso} paper USDso credit. Not an ERC-20 wallet balance; not withdrawable. BTC allowed: ${data.btcVoucherAllowed}.` :
+        `INELIGIBLE at block ${data.block}: ${data.eligibility.reason}. Voucher floor ${data.voucher?.floorUsdso ?? 'UNKNOWN'} USDso.`);
+      $('review-voucher').disabled = !data.eligibility.eligible || Number(data.nativeStt) <= 0 || !validChain();
+      text('funding-remediation', Number(data.nativeStt) <= 0 ?
+        'No Hideki STT. The official dreamDEX Link a Bot flow can send gas to this address. Linking also grants the operator limited trading rights; review that grant in dreamDEX.' :
+        'Hideki gas is available. Review voucher eligibility and claim separately; no transaction is sent automatically.');
+      text('wallet-details-status', `Read from Hideki RPC and official SDK at block ${data.block}. Refresh to update.`);
+    } catch (error) {
+      if (id !== state.fundingRequestId) return;
+      state.funding = null; $('review-voucher').disabled = true;
+      text('wallet-details-status', `Funding read unavailable: ${error.message}. Click Refresh balances to retry.`);
+      for (const field of ['wallet-native-stt', 'wallet-usdso-balance', 'wallet-margin-free',
+        'wallet-margin-withdrawable']) text(field, 'UNKNOWN');
+      text('voucher-eligibility', 'UNKNOWN. Eligibility requires a fresh Hideki read.');
+    }
+  }
   async function loadMarkets() {
+    status('Loading verified markets (timeout 60 seconds)…', 'warn');
     try { const result = await request('/api/v1/markets');
       const markets = result.markets;
       if (!Array.isArray(markets) || !markets.some(row => row.symbol === 'BTC-PERP')) throw Error('BTC market missing');
@@ -192,18 +254,23 @@
       $('market-select').replaceChildren(...options);
       if (options.some(option => option.value === previous && !option.disabled)) $('market-select').value = previous;
       status(`${markets.filter(row => row.status === 'TRADEABLE').length} markets passed SDK and factory status checks.`, 'ok');
-    } catch (error) { status(`Market registry unavailable: ${error.message}. BTC-only view remains.`, 'warn'); }
+    } catch (error) { status(`Market registry unavailable: ${error.message}. Click Refresh live data to retry.`, 'warn'); }
   }
   function onAccounts(accounts) {
     const next = Array.isArray(accounts) && /^0x[0-9a-fA-F]{40}$/.test(accounts[0] ?? '') ? accounts[0] : null;
     if (next?.toLowerCase() === state.account?.toLowerCase()) return;
-    state.account = next; state.accountData = null; state.requestId++; displayAccount();
-    if (connected()) loadAccount();
+    state.account = next; state.accountData = null; state.funding = null; state.voucherPlan = null;
+    state.requestId++; state.fundingRequestId++; displayAccount();
+    if (connected()) { loadAccount(); loadFunding(); }
+    if (next) request(`/api/v1/wallet/identity?account=${encodeURIComponent(next)}`).then(identity => {
+      if (state.account?.toLowerCase() === identity.account.toLowerCase()) text('wallet-full-address', identity.account);
+    }).catch(() => { text('wallet-details-status', 'Address checksum unavailable; retry wallet refresh.'); });
   }
   async function onChain(hex) {
     const parsed = Number(hex); state.chainId = Number.isInteger(parsed) ? parsed : null;
-    state.accountData = null; state.requestId++; displayAccount();
-    if (connected()) await loadAccount();
+    state.accountData = null; state.funding = null; state.voucherPlan = null;
+    state.requestId++; state.fundingRequestId++; displayAccount();
+    if (connected()) await Promise.all([loadAccount(), loadFunding()]);
   }
   $('wallet-connect').onclick = async () => {
     const provider = window.ethereum;
@@ -212,7 +279,12 @@
     try {
       const accounts = await provider.request({ method: 'eth_requestAccounts' });
       if (!Array.isArray(accounts) || !accounts.length) throw Error('Wallet returned no account.');
+      const confirmed = await provider.request({ method: 'eth_accounts' });
+      if (!Array.isArray(confirmed) || confirmed[0]?.toLowerCase() !== accounts[0]?.toLowerCase())
+        throw Error('eth_accounts differs from the wallet connection response.');
       state.provider = provider;
+      text('wallet-provider-name', provider.isMetaMask ? 'MetaMask-compatible injected provider' :
+        provider.isRabby ? 'Rabby injected provider' : 'Injected EIP-1193 provider (unidentified)');
       provider.on?.('accountsChanged', onAccounts);
       provider.on?.('chainChanged', onChain);
       onAccounts(accounts);
@@ -237,7 +309,93 @@
     state.provider?.removeListener?.('accountsChanged', onAccounts);
     state.provider?.removeListener?.('chainChanged', onChain);
     state.provider = null; state.account = null; state.chainId = null; state.accountData = null;
-    state.requestId++; displayAccount(); status('Application wallet session disconnected.');
+    state.requestId++; state.fundingRequestId++; displayAccount(); status('Application wallet session disconnected.');
+  };
+  $('wallet-identity').onclick = () => { const open = $('wallet-details').hidden;
+    $('wallet-details').hidden = !open; $('wallet-identity').setAttribute('aria-expanded', String(open));
+    if (open && connected() && !state.funding) loadFunding();
+    if (open) request('/api/v1/wallet/embedded-ownership').then(result => {
+      if (!$('wallet-details').hidden) text('embedded-wallet-status',
+        `Known dreamDEX smart account ${result.account}. Safe threshold ${result.threshold}; ${
+          result.metaMaskIsOwner ? 'expected MetaMask is an owner' : 'expected MetaMask is NOT an owner'}. Its funds are separate from the connected EOA.`);
+    }).catch(error => { text('embedded-wallet-status', `Embedded ownership read unavailable: ${error.message}`); }); };
+  $('nav-funding').onclick = event => { event.preventDefault();
+    if (!state.account) { $('wallet-connect').focus();
+      status('Connect an injected wallet to open Testnet Funding.', 'warn'); return; }
+    if ($('wallet-details').hidden) $('wallet-identity').click();
+    $('testnet-funding').scrollIntoView({ block: 'nearest' }); };
+  $('wallet-details-close').onclick = () => { $('wallet-details').hidden = true;
+    $('wallet-identity').setAttribute('aria-expanded', 'false'); };
+  $('wallet-panel-disconnect').onclick = () => $('wallet-disconnect').click();
+  $('wallet-panel-refresh').onclick = () => { if (connected()) { loadAccount(); loadFunding(); }
+    else text('wallet-details-status', 'Connect a wallet on Hideki 50383 first.'); };
+  $('wallet-copy-address').onclick = async () => { if (!state.account) return;
+    try { await window.navigator.clipboard.writeText($('wallet-full-address').textContent);
+      text('wallet-details-status', 'Connected wallet address copied.'); }
+    catch (error) { text('wallet-details-status', `Copy failed: ${error.message}`); } };
+  $('check-voucher').onclick = () => loadFunding();
+  $('review-voucher').onclick = async () => {
+    if (!connected() || !state.funding?.eligibility.eligible || state.busy || state.voucherPending) return;
+    state.voucherPlan = null; $('voucher-review').hidden = true;
+    state.busy = true; $('review-voucher').disabled = true;
+    text('voucher-result', 'Checking fresh eligibility, gas, nonce and contract simulation…');
+    try {
+      const account = state.account;
+      const plan = await request('/api/v1/wallet/voucher/prepare', { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account }) });
+      if (!connected() || account?.toLowerCase() !== state.account?.toLowerCase() ||
+        plan.status !== 'READY_FOR_OWNER_CONFIRMATION') throw Error('Wallet changed or claim is not ready.');
+      state.voucherPlan = plan;
+      text('voucher-review-details', `Hideki 50383 · ${plan.grantUsdso} nonwithdrawable paper USDso credit · recipient ${plan.account} · distributor ${plan.transaction.to} · selector ${plan.transaction.data} · nonce ${plan.transaction.nonce} · max simulated gas ${plan.transaction.maxGasCostStt} STT. One claim per address; no wallet ERC-20 transfer.`);
+      $('voucher-review').hidden = false;
+      text('voucher-result', 'READY_FOR_OWNER_CONFIRMATION. Claim only after reviewing the exact call.');
+    } catch (error) { text('voucher-result', `Claim review blocked: ${error.message}`); }
+    finally { state.busy = false; $('review-voucher').disabled = !connected() ||
+      !state.funding?.eligibility.eligible || Number(state.funding?.nativeStt ?? 0) <= 0; }
+  };
+  $('dismiss-voucher').onclick = () => { state.voucherPlan = null; $('voucher-review').hidden = true;
+    text('voucher-result', 'Claim review cancelled. No transaction sent.'); };
+  $('confirm-voucher').onclick = async () => {
+    const prior = state.voucherPlan;
+    if (!prior || !connected() || state.busy || state.voucherPending) return;
+    state.busy = true; $('confirm-voucher').disabled = true;
+    text('voucher-result', 'Rechecking claim immediately before wallet confirmation…');
+    try {
+      const [chain, accounts] = await Promise.all([
+        state.provider.request({ method: 'eth_chainId' }),
+        state.provider.request({ method: 'eth_accounts' }),
+      ]);
+      if (Number(chain) !== 50383 || !Array.isArray(accounts) ||
+        accounts[0]?.toLowerCase() !== prior.account.toLowerCase() ||
+        state.account?.toLowerCase() !== prior.account.toLowerCase()) throw Error('Wallet account or chain changed.');
+      const fresh = await request('/api/v1/wallet/voucher/prepare', { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: prior.account }) });
+      const tx = fresh.transaction, old = prior.transaction;
+      if (fresh.status !== 'READY_FOR_OWNER_CONFIRMATION' || tx.to.toLowerCase() !== old.to.toLowerCase() ||
+        tx.from.toLowerCase() !== old.from.toLowerCase() || tx.data !== old.data ||
+        tx.value !== old.value || tx.gas !== old.gas || tx.nonce !== old.nonce)
+        throw Error('Fresh claim differs from review. Review again.');
+      text('voucher-result', 'Waiting for explicit MetaMask confirmation…');
+      const hash = await state.provider.request({ method: 'eth_sendTransaction', params: [{
+        from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas,
+        nonce: `0x${tx.nonce.toString(16)}` }] });
+      if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw Error('Wallet returned an invalid transaction hash.');
+      state.voucherPlan = null; $('voucher-review').hidden = true;
+      state.voucherPending = { hash, account: prior.account };
+      recordJournal(hash, { account: prior.account, market: 'HIDEKI', action: 'VOUCHER_CLAIM', state: 'SUBMITTED' });
+      text('voucher-result', `Submitted ${hash}. Checking independent receipt and voucher state…`);
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const receipt = await request(`/api/v1/wallet/voucher/receipt?hash=${encodeURIComponent(hash)}&account=${encodeURIComponent(prior.account)}`);
+        if (receipt.state !== 'PENDING') { state.voucherPending = null;
+          recordJournal(hash, { state: receipt.state, source: `HIDEKI_RECEIPT_BLOCK_${receipt.block ?? 'UNKNOWN'}` });
+          text('voucher-result', `Voucher claim ${receipt.state} at block ${receipt.block ?? 'UNKNOWN'}${receipt.reason ? `: ${receipt.reason}` : ''}.`);
+          await loadFunding(); return; }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      text('voucher-result', `Claim ${hash} remains pending. Refresh balances before another action.`);
+    } catch (error) { state.voucherPlan = null; $('voucher-review').hidden = true;
+      text('voucher-result', `Claim stopped: ${error.message}. No retry was sent.`); }
+    finally { state.busy = false; $('confirm-voucher').disabled = false; }
   };
   for (const id of ['quantity', 'limit-price']) $(id).addEventListener('input', invalidate);
   window.addEventListener('canary:side', event => { state.side = event.detail; state.sizedQuantity = null;
@@ -302,7 +460,7 @@
       state.actionPlan = { input: draft, result: plan };
       text('action-details', `${draft.action} · ${draft.market} · ${draft.action === 'CANCEL' ?
         `order #${draft.orderId}` : `${draft.amount} USDso`} · allowance ${plan.allowance} USDso · wallet ${plan.walletUsdso} USDso · withdrawable ${plan.withdrawable} USDso`);
-      text('action-contract', `Hideki 50383 · ${plan.transaction.to} · from ${plan.transaction.from} · selector ${plan.transaction.data.slice(0, 10)} · max simulated gas ${plan.transaction.maxGasCostStt} STT`);
+      text('action-contract', `Hideki 50383 · ${plan.transaction.to} · from ${plan.transaction.from} · selector ${plan.transaction.data.slice(0, 10)} · nonce ${plan.transaction.nonce} · max simulated gas ${plan.transaction.maxGasCostStt} STT`);
       $('action-review').hidden = false; $('confirm-action').disabled = false;
       actionStatus('Review the exact action, then confirm explicitly in your wallet.', 'ok');
     } catch (error) { actionStatus(`Action blocked: ${error.message}`, 'error'); invalidateAction(); }
@@ -317,18 +475,21 @@
     try {
       const chain = Number(await state.provider.request({ method: 'eth_chainId' }));
       const accounts = await state.provider.request({ method: 'eth_accounts' });
-      if (chain !== 50383 || !accounts.some(value => value.toLowerCase() === reviewed.input.account.toLowerCase()))
+      if (chain !== 50383 || !Array.isArray(accounts) ||
+        accounts[0]?.toLowerCase() !== reviewed.input.account.toLowerCase())
         throw Error('Wallet account or network changed.');
       const fresh = await request('/api/v1/trade/action/prepare', { method: 'POST',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(reviewed.input) });
       const tx = fresh.transaction, prior = reviewed.result.transaction;
       if (!connected() || JSON.stringify(reviewed.input) !== JSON.stringify(actionDraft()) ||
         tx.chainId !== 50383 || tx.value !== '0x0' || tx.from.toLowerCase() !== prior.from.toLowerCase() ||
-        tx.to.toLowerCase() !== prior.to.toLowerCase() || tx.data !== prior.data || tx.gas !== prior.gas)
+        tx.to.toLowerCase() !== prior.to.toLowerCase() || tx.data !== prior.data ||
+        tx.gas !== prior.gas || tx.nonce !== prior.nonce)
         throw Error('Fresh action preflight differs. Review again.');
       actionStatus('Waiting for explicit wallet approval…', 'warn');
       const hash = await state.provider.request({ method: 'eth_sendTransaction', params: [{
-        from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas }] });
+        from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas,
+        nonce: `0x${tx.nonce.toString(16)}` }] });
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw Error('Wallet returned an invalid transaction hash.');
       state.actionPlan = null; $('action-review').hidden = true;
       state.actionPending = { hash, ...reviewed.input }; invalidate();
@@ -352,6 +513,7 @@
       $('review-order').disabled = !connected() || !!state.pendingHash || !!state.actionPending; }
   };
   $('refresh').addEventListener('click', async () => {
+    loadMarkets();
     if (connected()) loadAccount();
     if (state.actionPending) {
       const pending = state.actionPending;
@@ -401,7 +563,8 @@
       text('review-details', `${draft.side} ${draft.quantity} ${draft.market} @ ${draft.price} USDso · PostOnly · estimated notional ${
         (Number(plan.guard.notionalRaw) / 1e18).toFixed(2)} USDso`);
       text('review-risk', `Guard ${plan.guard.verdict}. ${plan.guard.warnings.join(' ') || 'No observed caution.'} Max simulated gas cost ${plan.transaction.maxGasCostStt} STT.`);
-      text('review-contract', `Hideki 50383 · pool ${plan.transaction.to} · from ${plan.transaction.from} · expires ${plan.transaction.expiresAt}`);
+      text('review-contract', `Hideki 50383 · pool ${plan.transaction.to} · from ${plan.transaction.from} · nonce ${plan.transaction.nonce} · expires ${plan.transaction.expiresAt}`);
+      text('review-calldata', `Exact placeOrder calldata: ${plan.transaction.data}`);
       $('trade-review').hidden = false; $('confirm-wallet').disabled = false;
       status('Review the exact wallet order, then confirm explicitly.', 'ok');
     } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate(); }
@@ -416,17 +579,20 @@
       const chain = Number(await state.provider.request({ method: 'eth_chainId' }));
       if (chain !== 50383 || chain !== state.chainId) throw Error('Wallet chain changed.');
       const accounts = await state.provider.request({ method: 'eth_accounts' });
-      if (!accounts.some(value => value.toLowerCase() === reviewed.input.account.toLowerCase())) throw Error('Wallet account changed.');
+      if (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== reviewed.input.account.toLowerCase())
+        throw Error('Wallet account changed.');
       const fresh = await request('/api/v1/trade/prepare', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...reviewed.input, expiresAt: Date.parse(reviewed.result.transaction.expiresAt) }) });
       const oldTx = reviewed.result.transaction, tx = fresh.transaction;
       if (fresh.status !== 'READY' || !tx || tx.data !== oldTx.data ||
         tx.to.toLowerCase() !== oldTx.to.toLowerCase() || tx.from.toLowerCase() !== oldTx.from.toLowerCase() ||
         tx.chainId !== 50383 || tx.value !== '0x0' || tx.gas !== oldTx.gas ||
+        tx.nonce !== oldTx.nonce || Date.parse(tx.expiresAt) < Date.now() + 30000 ||
         !connected()) throw Error('Fresh preflight differs or is blocked. Review a new order.');
       status('Waiting for your explicit wallet confirmation…', 'warn');
       const hash = await state.provider.request({ method: 'eth_sendTransaction', params: [{
-        from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas }] });
+        from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas,
+        nonce: `0x${tx.nonce.toString(16)}` }] });
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw Error('Wallet returned an invalid transaction hash.');
       state.pendingHash = hash; state.pendingAccount = tx.from; state.pendingMarket = reviewed.input.market;
       state.plan = null; $('trade-review').hidden = true;

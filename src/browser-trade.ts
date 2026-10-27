@@ -171,7 +171,8 @@ export async function prepareDirectTrade(input: DirectInput) {
   catch (error) { return { status: 'BLOCKED' as const,
     guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
       `Contract simulation failed: ${error instanceof Error ? error.message : 'UNKNOWN'}`] }, observation, transaction: null }; }
-  const gasPrice = await client.getGasPrice();
+  const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
+    client.getTransactionCount({ address: account, blockTag: 'pending' })]);
   const gasLimit = gas * 12n / 10n;
   const maxCost = gasLimit * gasPrice;
   if (maxCost > gasBudget || maxCost > BigInt(user.gasWei)) return { status: 'BLOCKED' as const,
@@ -180,7 +181,7 @@ export async function prepareDirectTrade(input: DirectInput) {
   return { status: 'READY' as const, guard, observation,
     transaction: { chainId: 50383, market: market.market.symbol, marketId,
       from: account, to: market.market.pool, data, value: '0x0',
-      gas: `0x${gasLimit.toString(16)}`, expiresAt: new Date(expiresAt).toISOString(),
+      gas: `0x${gasLimit.toString(16)}`, nonce, expiresAt: new Date(expiresAt).toISOString(),
       estimatedGas: gas.toString(), maxGasCostStt: formatUnits(maxCost, 18) } };
 }
 
@@ -267,13 +268,15 @@ export async function prepareWalletAction(input: WalletActionInput) {
   }
   const gas = await client.estimateGas({ account, to, data, value: 0n });
   const gasLimit = gas * 12n / 10n;
-  const gasPrice = await client.getGasPrice();
+  const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
+    client.getTransactionCount({ address: account, blockTag: 'pending' })]);
   if (gasLimit * gasPrice > gasBudget || gasLimit * gasPrice > BigInt(user.gasWei))
     throw Error('Simulated gas exceeds wallet balance or 0.1 STT budget');
   return { status: 'READY' as const, action: input.action, market: market.symbol, marketId: market.id,
     amount: input.amount ?? null, amountRaw: amountRaw?.toString() ?? null, orderId: input.orderId ?? null,
     allowance: user.allowance, walletUsdso: user.walletUsdso, withdrawable: user.withdrawable,
     transaction: { chainId: 50383, from: account, to, data, value: '0x0', gas: `0x${gasLimit.toString(16)}`,
+      nonce,
       maxGasCostStt: formatUnits(gasLimit * gasPrice, 18) } };
 }
 export async function readWalletActionReceipt(hash: string, rawAccount: string,

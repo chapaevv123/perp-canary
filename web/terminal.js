@@ -4,6 +4,22 @@
   const set = (id, value) => { $(id).textContent = value == null || value === '' ? '—' : String(value); };
   const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null, side: 'BUY',
     observations: [], started: new Date(), marketBusy: false, historyBusy: false };
+  const archiveButton = document.createElement('button');
+  archiveButton.id = 'historical-tools'; archiveButton.type = 'button';
+  archiveButton.className = 'button secondary'; archiveButton.textContent = 'Show historical owner evidence';
+  archiveButton.setAttribute('aria-expanded', 'false');
+  document.querySelector('.head-actions').append(archiveButton);
+  const historical = [document.getElementById('risk'), document.getElementById('portfolio'),
+    document.getElementById('proof'), document.querySelector('.prepare-command'),
+    document.getElementById('copy-prepare'), document.getElementById('copy-feedback')];
+  historical.forEach(element => { element.hidden = true; });
+  archiveButton.onclick = () => {
+    const show = archiveButton.getAttribute('aria-expanded') !== 'true';
+    archiveButton.setAttribute('aria-expanded', String(show));
+    archiveButton.textContent = show ? 'Hide historical owner evidence' : 'Show historical owner evidence';
+    historical.forEach(element => { element.hidden = !show; });
+    if (show) { loadOwnerAccount(); loadHistory(); loadPlan(); }
+  };
   const money = value => {
     const number = Number(value);
     if (value == null || !Number.isFinite(number)) return '—';
@@ -285,7 +301,8 @@
         renderOwnerAccount(account);
     } catch { if (!state.history) set('position-block', 'BLOCK UNKNOWN'); }
   }
-  $('refresh').onclick = () => { loadMarket(); loadOwnerAccount(); loadHistory(); loadPlan(); };
+  $('refresh').onclick = () => { loadMarket();
+    if (archiveButton.getAttribute('aria-expanded') === 'true') { loadOwnerAccount(); loadHistory(); loadPlan(); } };
   $('market-select').addEventListener('change', () => {
     state.market = null; state.observations = []; state.started = new Date();
     $('chart-line').setAttribute('d', ''); $('chart-dot').hidden = true;
@@ -342,8 +359,10 @@
     set('proof-events', 'Receipt events unavailable for verification.');
     set('proof-hash', `UNKNOWN: ${error.message}`);
   });
-  loadMarket(); loadOwnerAccount(); loadHistory(); loadPlan();
-  window.setInterval(loadMarket, 30000); window.setInterval(loadHistory, 60000); window.setInterval(loadPlan, 10000);
+  loadMarket();
+  window.setInterval(loadMarket, 30000);
+  window.setInterval(() => { if (archiveButton.getAttribute('aria-expanded') === 'true') loadHistory(); }, 60000);
+  window.setInterval(() => { if (archiveButton.getAttribute('aria-expanded') === 'true') loadPlan(); }, 10000);
   window.setInterval(() => { if (state.market) { updateBookFreshness(); updateRisk(); }
     if (state.plan && Date.now() >= Date.parse(state.plan.expiresAt)) loadPlan(); }, 5000);
 })();

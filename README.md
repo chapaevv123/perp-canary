@@ -41,6 +41,7 @@ The historical owner-bot risk panel uses `NOT_RUN` for checks that have not been
 - [Architecture](docs/architecture.md)
 - [M5 trading capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md)
 - [M5.1 continuation report](docs/m51-progress-report.md)
+- [M5.2 wallet architecture and funding audit](docs/m52-wallet-funding.md)
 - [Security model](docs/security-model.md)
 - [Verified on-chain evidence](docs/verified-onchain-evidence.md)
 - [Demo walkthrough](docs/demo-walkthrough.md)
