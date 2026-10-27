@@ -20,6 +20,8 @@ npm.cmd run serve
 
 Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier research and diagnostics UI remains at `/legacy`.
 
+The terminal keeps its graphite/purple trading layout across desktop and mobile. Its original Canary SVG is served locally as both the header mark and favicon; no external font or image request is required.
+
 The chart begins when the page opens and contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. The right-hand trade panel is a **local visual preview**: its quantity and price fields do not prepare or submit a plan. When the values satisfy the visible tick, lot, PostOnly, deviation and notional checks, its copy button produces the exact `npm.cmd run canary-prepare -- BUY <price> <quantity>` command. The CLI performs a fresh independent preflight and can still block it. BUY PostOnly is the verified owner path; unsupported SELL, IOC and Best Ask for a PostOnly BUY are disabled.
 
 To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**

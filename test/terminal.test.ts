@@ -53,7 +53,8 @@ test('all served web assets are strict UTF-8 without Cyrillic mojibake or replac
   const html = await readFile('web/index.html', 'utf8');
   assert.match(html, /<meta charset="utf-8">/);
   assert.match(html, /Perp Canary — BTC-PERP terminal/);
-  assert.match(html, /class="brandmark">PB<\/span>/);
+  assert.match(html, /class="brandmark" src="\/canary-mark.svg"/);
+  assert.match(html, /rel="icon" type="image\/svg\+xml" href="\/canary-mark.svg"/);
 });
 
 async function freePort(): Promise<number> {
@@ -90,6 +91,9 @@ test('terminal HTTP serves sanitized proof and read-only home without RPC', asyn
     assert.match(await legacy.text(), /Execution Integrity/);
     assert.equal((await fetch(`${base}/terminal.css`)).status, 200);
     assert.equal((await fetch(`${base}/terminal.js`)).status, 200);
+    const logo = await fetch(`${base}/canary-mark.svg`);
+    assert.match(logo.headers.get('content-type') ?? '', /image\/svg\+xml/);
+    assert.match(await logo.text(), /<svg/);
     const plan = await fetch(`${base}/api/v1/terminal/plan`);
     assert.equal(plan.status, 200);
     assert.equal(await plan.json(), null);

@@ -31,6 +31,7 @@ const htmlPath = resolve('web/index.html');
 const legacyHtmlPath = resolve('web/legacy.html');
 const terminalCssPath = resolve('web/terminal.css');
 const terminalJsPath = resolve('web/terminal.js');
+const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
 const forensicsJsPath = resolve('web/forensics.js');
@@ -91,6 +92,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/terminal.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(terminalJsPath));
+    } else if (request.method === 'GET' && path === '/canary-mark.svg') {
+      response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
+      response.end(await readFile(canaryMarkPath));
     } else if (request.method === 'POST' && path === '/api/v1/snapshot') {
       if (refreshing) { json(response, 409, { error: 'A snapshot refresh is already running' }); return; }
       refreshing = true;

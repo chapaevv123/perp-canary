@@ -72,3 +72,50 @@ footer{font-size:12px;gap:18px}
   .proof-list button{grid-column:2;justify-self:start;padding:2px 0}
   footer{flex-wrap:wrap}
 }
+
+/* M4.5 identity and interaction polish. */
+.brandmark{display:block;object-fit:contain;width:44px;height:44px;flex:0 0 44px;background:none;border-radius:12px;box-shadow:0 0 20px #7464dc33}
+.brand:hover .brandmark{box-shadow:0 0 24px #ffc85755}
+.metric strong{font-size:clamp(26px,1.55vw,32px)}
+.eyebrow,.metric label,.position-row span,.proof-list dt,th,.book-labels,.badge{font-size:13px}
+.small,.control-note,.chart-foot,.chart-source,.book-info,.depth-row,.book-spread,.risk-intro,.risk-note,.proof-events,.proof-lead span{font-size:13px}
+.eyebrow,.metric label,.position-row span,.proof-list dt,th{letter-spacing:.055em}
+.metric span,.book-info span,.chart-foot,.chart-source,.small,.timeline li span{color:#a7b3c6}
+.panel{box-shadow:0 2px 14px #0d10191f}
+button:disabled{opacity:.57}select:disabled{opacity:.75}
+button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease}
+.button.primary:hover:not(:disabled){background:#7568e9;border-color:#897dff}
+.side-switch .buy:hover:not(:disabled){background:#17634f}
+.quick-actions button:hover:not(:disabled),.offsets button:hover:not(:disabled),.proof-actions button:hover:not(:disabled){background:#404b61;border-color:#8479db;color:#fff}
+.proof-list button:hover:not(:disabled){color:#ddd7ff;text-decoration:underline;text-underline-offset:3px}
+.quick-actions button:focus-visible,.offsets button:focus-visible,.proof-actions button:focus-visible,.proof-list button:focus-visible{outline:2px solid #b1a8ff;outline-offset:2px}
+#refresh:disabled{background:#353b4d;color:#d0d6e2}
+.copy-success{color:#70e4b6}.copy-failure{color:#ff9eac}
+.chart-empty{color:#c3ccda;border-color:#59647a;background:#232936ef}
+.pill.muted{color:#d1d9e5}.badge.amber{color:#ffcf89}.badge.red{color:#ff9bae}
+.book-row.ask{background:#4b303e}.book-row.bid{background:#204a3b}
+.gate .pending{color:#ffd397}.risk-note{line-height:1.5}
+.proof-lead{border-color:#388c73}.proof-list dd{line-height:1.5;overflow-wrap:anywhere}
+.proof-panel .live-message{min-height:22px}
+@media(max-width:550px){
+  .topbar{padding:12px 14px 0}.brand{width:100%}.top-status{width:100%;gap:6px}
+  .panel-head{flex-wrap:wrap}.panel-head .badge{white-space:normal}
+  .top-status .pill{display:inline-flex}.network,.pill{font-size:13px}
+  .topbar nav{height:auto;flex-wrap:wrap;gap:0;overflow:visible;padding-top:3px}
+  .topbar nav a{height:38px;flex:1 1 48%;justify-content:center;border-bottom:1px solid #323a4a}
+  .page-head h1{font-size:30px}.head-actions{gap:10px}
+  .metric strong{font-size:26px}.metric span{font-size:13px}
+  .chart-foot{font-size:12px}.proof-list dd{font-size:13px}
+  .table-wrap{overflow:visible}table,tbody{display:block}thead{display:none}
+  .order-row{display:grid;grid-template-columns:1fr;gap:0;border:1px solid #3b4659;border-radius:6px;margin:8px 0}
+  .order-row td{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;overflow-wrap:anywhere}
+  .order-row td::before{content:attr(data-label);color:#aab7c9;font-weight:600}
+}
+@media(max-width:360px){
+  .summary-grid{grid-template-columns:1fr;gap:8px}.metric{padding:12px 14px;min-height:0}
+  .metric strong{font-size:26px}.metric label{font-size:13px}.metric span{font-size:13px}
+  .position-row{grid-template-columns:1fr}.gate-grid{grid-template-columns:1fr}
+  .proof-actions button{min-width:100%}.proof-list div{grid-template-columns:1fr;gap:4px}
+  .proof-list button{grid-column:1}.head-actions .button{padding-inline:10px}
+}
+@media(prefers-reduced-motion:reduce){button:not(:disabled),a,.brandmark{transition:none}}

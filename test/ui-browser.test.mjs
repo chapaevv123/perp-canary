@@ -127,6 +127,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()),
       'npm.cmd run canary-prepare -- BUY 79407 0.00013');
     assert.match(await page.locator('#copy-feedback').textContent(), /Copied/);
+    assert.match(await page.locator('#copy-feedback').getAttribute('class'), /copy-success/);
     await page.locator('#quantity').fill('0.0002');
     assert.match(await page.locator('#prepare-command').textContent(), /BUY 79407 0\.0002/);
     await page.locator('#copy-prepare').click();
@@ -175,6 +176,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
       configurable: true, value: () => Promise.reject(new Error('clipboard denied')) }));
     await page.locator('[data-copy="tx"]').click();
     assert.match(await page.locator('#proof-copy-feedback').textContent(), /Copy failed/);
+    assert.match(await page.locator('#proof-copy-feedback').getAttribute('class'), /copy-failure/);
 
     setMarket(market('34470001', '79810'));
     await page.locator('#refresh').click();
@@ -219,7 +221,7 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
   try {
     mkdirSync('test-results', { recursive: true });
     for (const [width, height] of [[2560, 1440], [1920, 1080], [1600, 900], [1440, 900],
-      [1366, 768], [1280, 800], [768, 1024]]) {
+      [1366, 768], [1280, 800], [768, 1024], [390, 844], [320, 720]]) {
       await page.setViewportSize({ width, height });
       const layout = await page.evaluate(() => {
         const rect = selector => document.querySelector(selector).getBoundingClientRect();
@@ -230,6 +232,9 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
         const trade = rect('.trade-panel'), risk = rect('.risk-panel'), portfolio = rect('.portfolio-panel');
         const proof = rect('.proof-panel');
         return { width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth,
+          overflowNodes: [...document.querySelectorAll('body *')].filter(node =>
+            node.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 8).map(node =>
+            `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.className && typeof node.className === 'string' ? `.${node.className.split(' ')[0]}` : ''}`),
           brandNav: intersects(brand, nav), brandStatus: intersects(brand, status), navStatus: intersects(nav, status),
           brandVisible: brand.width > 100 && brand.height > 20,
           shell: shell.width, shellLeft: shell.left, headerLeft: brand.left,
@@ -248,12 +253,14 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
       assert.equal(layout.scrollWidth <= layout.width, true, `horizontal overflow at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandNav || layout.brandStatus || layout.navStatus, false, `header overlap at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandVisible, true);
-      assert.ok(layout.shell >= width * .94 && layout.shell <= width * .96,
+      assert.ok(width >= 550 ? layout.shell >= width * .94 && layout.shell <= width * .96 :
+        layout.shell >= width - 30 && layout.shell <= width - 26,
         `shell width at ${width}: ${JSON.stringify(layout)}`);
       assert.ok(layout.fonts.body >= 15 && layout.fonts.secondary >= 12 && layout.fonts.button >= 14 &&
         layout.fonts.input >= 15 && layout.fonts.price >= 22 && layout.fonts.heading >= 17,
       `typography at ${width}: ${JSON.stringify(layout.fonts)}`);
-      assert.ok(layout.chart.width > 300 && layout.book.width > 300 && layout.trade.width > 300,
+      assert.ok(layout.chart.width > (width < 550 ? 250 : 300) &&
+        layout.book.width > (width < 550 ? 250 : 300) && layout.trade.width > (width < 550 ? 250 : 300),
         `panel width at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.tableFits && layout.proofFits, true, `table or hash overflow at ${width}: ${JSON.stringify(layout)}`);
       if (width >= 1600) {
@@ -268,10 +275,39 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
           layout.trade.y < layout.risk.y && layout.risk.y < layout.portfolio.y &&
           layout.portfolio.y < layout.proof.y, `tablet panel order at ${width}: ${JSON.stringify(layout)}`);
       }
-      if (width === 1920 || width === 2560 || width === 768)
+      if (width === 1920 || width === 2560 || width === 390 || width === 320)
         await page.screenshot({ path: `test-results/ui-qa-${width}.png`, fullPage: true });
+      if (width === 1920)
+        await page.locator('.topbar').screenshot({ path: 'test-results/ui-qa-header-1920.png' });
       if (width === 1920 || width === 2560) process.stdout.write(`QA layout ${JSON.stringify(layout)}\n`);
     }
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: original Canary SVG serves as logo and favicon at five sizes', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    const icon = await page.request.get(`${base}/canary-mark.svg`);
+    assert.equal(icon.status(), 200);
+    assert.match(icon.headers()['content-type'], /image\/svg\+xml/);
+    assert.match(await icon.text(), /<svg[\s\S]*<path/);
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/canary-mark.svg');
+    assert.equal(await page.locator('.brandmark').evaluate(image => image.complete && image.naturalWidth > 0), true);
+    assert.doesNotMatch(await page.locator('.brand').innerText(), /\bPB\b/);
+    await page.evaluate(async () => {
+      const sample = document.createElement('div');
+      sample.id = 'logo-size-samples';
+      sample.style.cssText = 'display:flex;align-items:center;gap:24px;padding:24px;background:#151922;width:max-content';
+      for (const size of [16, 24, 32, 48, 128]) {
+        const image = document.createElement('img');
+        image.src = '/canary-mark.svg'; image.width = size; image.height = size;
+        image.alt = `Canary mark ${size}px`; sample.append(image);
+      }
+      document.body.append(sample);
+      await Promise.all([...sample.querySelectorAll('img')].map(image => image.decode()));
+    });
+    await page.locator('#logo-size-samples').screenshot({ path: 'test-results/ui-qa-logo-sizes.png' });
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

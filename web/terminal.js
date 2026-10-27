@@ -201,9 +201,10 @@
     const body = $('orders-body'); body.replaceChildren();
     if (!h.openOrders.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 5; td.textContent = `No open BTC-PERP orders at block ${h.readBlock}`; tr.append(td); body.append(tr); }
     for (const row of h.openOrders) {
-      const tr = document.createElement('tr');
-      for (const value of [row.id, row.side, money(row.price), row.remaining, 'OPEN_AT_READ']) {
-        const td = document.createElement('td'); td.textContent = value; tr.append(td);
+      const tr = document.createElement('tr'); tr.className = 'order-row';
+      const labels = ['Order ID', 'Side', 'Limit', 'Remaining', 'Status'];
+      for (const [index, value] of [row.id, row.side, money(row.price), row.remaining, 'OPEN_AT_READ'].entries()) {
+        const td = document.createElement('td'); td.textContent = value; td.dataset.label = labels[index]; tr.append(td);
       } body.append(tr);
     }
     const items = h.events.map(e => timelineItem(e.name, `Block ${e.block} · tx ${e.txHash.slice(0, 12)}… · ${e.source}${e.quantityRaw ? ` · ${Number(e.quantityRaw) / 1e8} BTC` : ''}`));
@@ -221,8 +222,10 @@
   }
   async function copy(value, label, feedback = 'copy-feedback') {
     if (!value) return;
-    try { await window.navigator.clipboard.writeText(value); set(feedback, `${label}: Copied`); }
-    catch { set(feedback, 'Copy failed. Use the displayed value or local CLI output.'); }
+    try { await window.navigator.clipboard.writeText(value); set(feedback, `${label}: Copied`);
+      $(feedback).className = 'small live-message copy-success'; }
+    catch { set(feedback, 'Copy failed. Use the displayed value or local CLI output.');
+      $(feedback).className = 'small live-message copy-failure'; }
   }
   async function loadPlan() {
     try {
