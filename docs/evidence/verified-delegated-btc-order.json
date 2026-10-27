@@ -1,0 +1,113 @@
+{
+  "schema": "perp-canary/verified-delegated-btc-order/v1",
+  "observedAt": "2026-10-27T20:15:48.987Z",
+  "sources": {
+    "receiptsAndEvents": "LIVE_ON_CHAIN",
+    "accountAndOpenOrders": "LIVE_READ_ONLY_ON_CHAIN",
+    "history": "OFFICIAL_SDK_INDEXER_NONFINAL",
+    "priorPosition": "PRIOR_LIVE_READ_ONLY_OBSERVATION"
+  },
+  "chainId": 50383,
+  "head": "34799296",
+  "placement": {
+    "hash": "0xb542d3a603b33a598f8dab8d2e4f38c8b7ee163bfbd169dd32acc9429d35d28f",
+    "block": "34789238",
+    "receiptBlock": "34789238",
+    "status": "success",
+    "from": "0x6fa3659a15e9264e43ec67fe4bb5d31d38109a42",
+    "to": "0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0",
+    "selector": "0x80054449",
+    "callOwner": "0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f",
+    "isBid": true,
+    "price": "80880",
+    "quantity": "0.00013",
+    "orderType": 3,
+    "receiptMatchingOrderLogs": 2
+  },
+  "orderId": "14978756187852164141712",
+  "placedOwner": "0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f",
+  "events": [
+    {
+      "name": "OrderPlaced",
+      "block": "34789238",
+      "transactionHash": "0xb542d3a603b33a598f8dab8d2e4f38c8b7ee163bfbd169dd32acc9429d35d28f",
+      "logIndex": 79,
+      "orderId": "14978756187852164141712",
+      "takerOrderId": null,
+      "makerOrderId": null,
+      "owner": "0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f",
+      "quantityFilled": null,
+      "takerRemaining": null,
+      "makerRemaining": null,
+      "fillPrice": null
+    },
+    {
+      "name": "OrderRested",
+      "block": "34789238",
+      "transactionHash": "0xb542d3a603b33a598f8dab8d2e4f38c8b7ee163bfbd169dd32acc9429d35d28f",
+      "logIndex": 80,
+      "orderId": "14978756187852164141712",
+      "takerOrderId": null,
+      "makerOrderId": null,
+      "owner": null,
+      "quantityFilled": null,
+      "takerRemaining": null,
+      "makerRemaining": null,
+      "fillPrice": null
+    },
+    {
+      "name": "OrderFilled",
+      "block": "34790084",
+      "transactionHash": "0x1b7e19bb1afbf14ed21e74da7cf667ccb17c40ec310698293dbd6e4c343f65d4",
+      "logIndex": 162,
+      "orderId": "14978756187852164141712",
+      "takerOrderId": "8614629482422368834816",
+      "makerOrderId": "14978756187852164141712",
+      "owner": null,
+      "quantityFilled": "0.00013",
+      "takerRemaining": "0",
+      "makerRemaining": "0",
+      "fillPrice": "80880"
+    }
+  ],
+  "fillReceipt": {
+    "status": "success",
+    "block": "34790084",
+    "hash": "0x1b7e19bb1afbf14ed21e74da7cf667ccb17c40ec310698293dbd6e4c343f65d4",
+    "containsMatchingPoolLog": true
+  },
+  "current": {
+    "block": "34799323",
+    "owner": "0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f",
+    "pool": "0x4181dd08E73BbCdd1Ba3E615A18f6abD941b94C0",
+    "position": {
+      "size": "0.05429",
+      "sizeBtc": "0.05429",
+      "entryPrice": "80045.802320869405046969"
+    },
+    "openOrders": [],
+    "margin": "982.609033367617085483"
+  },
+  "indexed": {
+    "id": "14978756187852164141712",
+    "side": "BUY",
+    "price": "80880",
+    "originalQuantity": "0.00013",
+    "filledQuantity": "0.00013",
+    "status": "Filled",
+    "rested": true,
+    "cancelReason": null,
+    "endedAt": "2026-10-27T20:00:09.000Z",
+    "placedTxHash": "0xb542d3a603b33a598f8dab8d2e4f38c8b7ee163bfbd169dd32acc9429d35d28f"
+  },
+  "priorPosition": {
+    "sizeBtc": "0.05416",
+    "source": "M5.3 live account read, before placement",
+    "note": "The pre-existing position belongs to Wallet 1; only the 0.00013 BTC change matches this order."
+  },
+  "limitations": [
+    "Current position and free margin can change after this read.",
+    "Indexer status can lag the chain; receipt events and on-chain open orders are decisive.",
+    "No cancellation or reduce-only position close transaction is implied."
+  ]
+}

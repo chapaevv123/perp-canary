@@ -1,10 +1,12 @@
-/* EIP-1193 direct-wallet flow. The local server only reads and prepares unsigned calls. */
+/* EIP-1193 direct and owner-delegated flows. The server only reads and prepares unsigned calls. */
+import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js';
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = { provider: null, account: null, chainId: null, accountData: null,
+  const state = { provider: null, account: null, chainId: null, accountData: null, mode: 'DIRECT',
     side: 'BUY', market: null, plan: null, busy: false, pendingHash: null, pendingAccount: null,
-    pendingMarket: null, requestId: 0, fundingRequestId: 0, marketRegistry: [],
+    pendingMarket: null, pendingMode: null, pendingData: null,
+    requestId: 0, fundingRequestId: 0, historyRequestId: 0, marketRegistry: [],
     funding: null, voucherPlan: null, voucherPending: null };
   const expectedMetaMask = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
   const embeddedAccount = '0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f';
@@ -15,6 +17,14 @@
   panel.querySelector('.trade-callout strong').textContent = 'Every order requires your wallet confirmation.';
   panel.querySelector('.trade-callout span').textContent =
     'Perp Canary prepares and simulates a direct pool call. Your connected wallet signs and sends it only after review.';
+  document.querySelector('.chart-panel .eyebrow').textContent = 'LIVE MARK TRACE · THIS SESSION';
+  $('bot-pill').textContent = 'POOL · CHECKING';
+  const feeFacts = document.createElement('div'); feeFacts.innerHTML =
+    '<span>Builder fee</span><strong>0 bps in calldata</strong>';
+  panel.querySelector('.trade-facts').append(feeFacts);
+  const feeNote = document.createElement('p'); feeNote.className = 'small';
+  feeNote.textContent = 'Exchange and funding fees are not quoted here. Review dreamDEX terms before trading.';
+  panel.querySelector('.trade-facts').after(feeNote);
   $('sell').title = 'SELL PostOnly can open or add to a short; this is not reduce-only.';
   $('use-ask').title = 'Available for SELL PostOnly. For BUY it would cross the book.';
   $('copy-prepare').textContent = 'Copy separate owner CLI command';
@@ -22,14 +32,18 @@
   $('copy-prepare').classList.add('secondary');
   const workflow = document.createElement('div'); workflow.className = 'wallet-workflow';
   workflow.innerHTML = `
+    <div class="account-mode" role="group" aria-label="Trading account">
+      <button id="mode-delegated" type="button" class="mode-button" aria-pressed="false">Delegated Perps<span>Wallet 1 margin · MetaMask gas</span></button>
+      <button id="mode-direct" type="button" class="mode-button active" aria-pressed="true">Direct Wallet<span>Connected EOA margin</span></button>
+    </div><p id="mode-explanation" class="mode-explanation">Direct Wallet uses only the connected EOA's margin. Choose Delegated Perps for Wallet 1 after a verified Link a Bot grant.</p>
     <div class="wallet-summary"><strong id="wallet-state">Connect an EIP-1193 wallet to trade directly.</strong>
-      <span id="wallet-balances">Wallet balance and MarginBank: not read</span></div>
+      <span id="wallet-balances">Wallet balance and MarginBank: not read</span><span id="wallet-permissions">Trading permissions: checking after wallet connection.</span></div>
     <div class="radar-card"><span>CANARY MARKET RADAR</span><strong id="radar-state">UNKNOWN</strong>
       <p id="radar-details">Waiting for independently checked live data.</p>
       <p id="radar-monitoring">In-tab monitoring active while this page remains open.</p>
       <div id="radar-alerts"></div></div>
-    <div class="guard-card"><span>CANARY TRADE GUARD</span><strong id="guard-verdict">UNKNOWN</strong>
-      <p id="guard-explanation">A fresh quote, wallet balance, margin size and contract simulation are required.</p></div>
+    <div class="guard-card"><span>CANARY TRADE GUARD</span><strong id="guard-verdict">AWAITING REVIEW</strong>
+      <p id="guard-explanation">Enter an order and review it to run fresh book, account, margin, gas and contract checks.</p></div>
     <button id="review-order" class="button primary full" type="button" disabled>Review wallet order</button>
     <div id="trade-review" class="review-card" hidden>
       <h3>Review direct BTC-PERP order</h3><p id="review-details"></p>
@@ -37,6 +51,7 @@
       <div class="review-actions"><button id="confirm-wallet" class="button primary" type="button">Confirm in wallet</button>
         <button id="dismiss-review" class="button secondary" type="button">Edit order</button></div>
     </div><p id="wallet-result" class="wallet-result" role="status" aria-live="polite"></p>
+    <div id="preflight-details" class="preflight-details" role="status" aria-live="polite" hidden></div>
     <div class="sizing-card"><strong>Smart position sizing</strong>
       <p>Reference calculation only. A stop reference does not install a stop order.</p>
       <div class="sizing-fields"><label>Capital (USDso)<input id="size-capital" type="text" inputmode="decimal" placeholder="100"></label>
@@ -45,7 +60,7 @@
       <button id="calculate-size" class="button secondary full" type="button">Calculate from current entry</button>
       <p id="size-result" role="status" aria-live="polite">Enter capital, risk, a limit entry and stop reference.</p>
       <button id="use-sized-quantity" class="button secondary full" type="button" disabled>Use calculated quantity</button></div>
-    <div class="wallet-position"><strong>Your selected-market account</strong><p id="wallet-position">Connect a wallet to read your own position and open orders.</p>
+    <div class="wallet-position"><strong id="position-heading">Your selected-market account</strong><p id="wallet-position">Connect a wallet to read your own position and open orders.</p>
       <div id="wallet-orders"></div></div>
     <div class="wallet-actions"><strong>Manage margin and orders</strong>
       <p>Each action has its own simulation, review and wallet confirmation. Approval is bounded to the entered amount.</p>
@@ -62,18 +77,44 @@
       <p id="action-result" class="wallet-result" role="status" aria-live="polite"></p></div>
     <div class="wallet-journal"><strong>Trade Review</strong>
       <p id="trade-review-summary">Awaiting a wallet transaction receipt. Placement, current open state and fills are separate facts.</p>
-      <strong>On-chain trade journal</strong>
+      <strong>Recent browser transactions</strong>
       <p>Local public transaction references; states come from independently read receipts and open orders.</p>
-      <div id="journal-entries">No wallet transactions from this browser session.</div></div>
+      <div id="journal-entries">No wallet transactions from this browser session.</div>
+      <strong>Order History · SDK indexer</strong><p>Finished orders for the selected account and market. Indexer rows may lag current on-chain state.</p>
+      <button id="load-order-history" class="button secondary" type="button">Load order history</button>
+      <p id="history-status" role="status">History not requested.</p><div id="history-rows"></div>
+      <p id="verified-trade-note" class="small" hidden>Verified historical delegated BTC order: #14978756187852164141712, BUY 0.00013 BTC at 80880 USDso, fully filled in block 34790084. This is prior evidence, not a current quote or open order. Confirm current state with Load order history.</p></div>
     <div class="wallet-journal"><strong>Canary AI Copilot</strong>
       <p>Unavailable: no model service is connected. Guard, Radar and sizing use disclosed deterministic checks; they do not generate AI advice.</p></div>`;
   panel.querySelector('.trade-facts').before(workflow);
+  for (const selector of ['.account-mode', '.mode-explanation', '.wallet-summary'])
+    panel.querySelector('.side-switch').before(workflow.querySelector(selector));
+  const accountDesk = document.createElement('section');
+  accountDesk.className = 'account-desk'; accountDesk.setAttribute('aria-label', 'Account and trading intelligence');
+  for (const selector of ['.wallet-position', '.wallet-actions', '.radar-card', '.sizing-card', '.wallet-journal']) {
+    const element = workflow.querySelector(selector);
+    if (element) accountDesk.append(element);
+  }
+  const mainGrid = document.querySelector('.main-grid');
+  mainGrid.append(accountDesk);
+  const diagnostics = document.createElement('section');
+  diagnostics.className = 'diagnostic-dock'; diagnostics.setAttribute('aria-label', 'Historical owner diagnostics');
+  for (const id of ['risk', 'portfolio', 'proof']) diagnostics.append($(id));
+  mainGrid.after(diagnostics);
+  const unavailableCopilot = workflow.querySelector('.wallet-journal');
+  if (unavailableCopilot) unavailableCopilot.remove();
   const status = (message, kind = '') => { $('wallet-result').textContent = message; $('wallet-result').dataset.kind = kind; };
   const actionStatus = (message, kind = '') => { $('action-result').textContent = message;
     $('action-result').dataset.kind = kind; };
   const text = (id, value) => { $(id).textContent = value; };
   const validChain = () => state.chainId === 50383;
   const connected = () => !!state.account && validChain();
+  const delegated = () => state.mode === 'DELEGATED_PERPS';
+  const prepareUrl = () => delegated() ? '/api/v1/trade/delegated/prepare' : '/api/v1/trade/prepare';
+  const receiptUrl = mode => mode === 'DELEGATED_PERPS' ? '/api/v1/trade/delegated/receipt' : '/api/v1/trade/receipt';
+  const actionReceiptUrl = entry => entry.mode === 'DELEGATED_PERPS' ?
+    `/api/v1/trade/delegated/receipt?hash=${encodeURIComponent(entry.hash)}&account=${encodeURIComponent(entry.account)}&market=${encodeURIComponent(entry.market)}&action=CANCEL&orderId=${encodeURIComponent(entry.orderId)}&expectedData=${encodeURIComponent(entry.data)}` :
+    `/api/v1/trade/action/receipt?hash=${encodeURIComponent(entry.hash)}&account=${encodeURIComponent(entry.account)}&market=${encodeURIComponent(entry.market)}&action=${entry.action}&orderId=${encodeURIComponent(entry.orderId)}&amount=${encodeURIComponent(entry.amount)}`;
   const journalKey = 'perp-canary/trade-journal/v1';
   function readJournal() { try { const rows = JSON.parse(window.localStorage.getItem(journalKey) || '[]');
     return Array.isArray(rows) ? rows.filter(row => row && typeof row.hash === 'string').slice(0, 100) : []; }
@@ -109,25 +150,80 @@
     const timer = setTimeout(() => controller.abort(), 60000);
     try { const response = await fetch(url, { cache: 'no-store', signal: controller.signal, ...options });
       const body = await response.json();
-      if (!response.ok) throw Error(body.error || `HTTP ${response.status}`);
+      if (!response.ok) { const error = Error(body.error || `HTTP ${response.status}`);
+        error.code = body.code; error.readBlock = body.readBlock; throw error; }
       return body;
     } finally { window.clearTimeout(timer); }
   };
   function input() { return { account: state.account, market: $('market-select').value,
     side: state.side, orderType: 'POST_ONLY',
-    price: $('limit-price').value.trim(), quantity: $('quantity').value.trim() }; }
+    price: $('limit-price').value.trim(), quantity: $('quantity').value.trim(),
+    ...(delegated() ? { mode: 'DELEGATED_PERPS', owner: embeddedAccount } : {}) }; }
+  function switchMode(mode) {
+    if (state.busy || state.pendingHash || state.actionPending) {
+      status('Finish or refresh the pending wallet transaction before switching accounts.', 'warn'); return;
+    }
+    state.mode = mode; state.accountData = null; state.requestId++;
+    state.historyRequestId++; $('history-rows').replaceChildren();
+    text('history-status', 'History not requested for this account mode.');
+    $('mode-direct').classList.toggle('active', !delegated());
+    $('mode-delegated').classList.toggle('active', delegated());
+    $('mode-direct').setAttribute('aria-pressed', String(!delegated()));
+    $('mode-delegated').setAttribute('aria-pressed', String(delegated()));
+    $('verified-trade-note').hidden = !delegated();
+    $('wallet-action').querySelectorAll('option').forEach(option => { option.disabled = delegated() && option.value !== 'CANCEL'; });
+    $('wallet-action').value = delegated() ? 'CANCEL' : 'APPROVE';
+    $('wallet-action').dispatchEvent(new window.Event('change'));
+    $('position-heading').textContent = delegated() ? 'Wallet 1 position & open orders' : 'Your direct EOA position & open orders';
+    $('mode-explanation').textContent = delegated() ?
+      `MetaMask ${state.account ?? 'not connected'} signs as operator and pays gas. Wallet 1 ${embeddedAccount} owns margin, positions and orders. Rights are read from this pool before each action.` :
+      'Direct Wallet uses only the connected EOA balance and margin. Wallet 1 funds are separate.';
+    panel.querySelector('.eyebrow').textContent = delegated() ? 'DELEGATED PERPS · WALLET 1' : 'DIRECT WALLET TRADING';
+    panel.querySelector('.trade-callout span').textContent = delegated() ?
+      'Perp Canary checks the live pool grant and simulates placeOrderFor. MetaMask confirms each transaction; Wallet 1 keeps the position and margin.' :
+      'Perp Canary prepares and simulates a direct pool call. Your connected wallet signs and sends it only after review.';
+    $('trade-review').querySelector('h3').textContent = `Review ${delegated() ? 'delegated' : 'direct'} ${$('market-select').value} order`;
+    text('wallet-balances', 'Reading selected trading account…');
+    text('wallet-permissions', delegated() ? 'Checking pool grant…' : 'Direct EOA: no operator grant required.');
+    text('wallet-position', 'Reading selected market position and orders…');
+    $('wallet-orders').replaceChildren();
+    invalidate(); if (connected()) loadAccount();
+  }
+  $('mode-direct').onclick = () => switchMode('DIRECT');
+  $('mode-delegated').onclick = () => switchMode('DELEGATED_PERPS');
+  $('load-order-history').onclick = async () => {
+    if (!connected()) { text('history-status', 'Connect a wallet on Hideki 50383 first.'); return; }
+    const id = ++state.historyRequestId, account = state.account, mode = state.mode;
+    const market = $('market-select').value;
+    $('load-order-history').disabled = true;
+    text('history-status', 'Reading finished orders from the official SDK indexer (timeout 60 seconds)…');
+    try { const result = await request(`/api/v1/trade/history?account=${encodeURIComponent(account)}&mode=${mode}&market=${encodeURIComponent(market)}`);
+      if (id !== state.historyRequestId || account !== state.account || mode !== state.mode ||
+        market !== $('market-select').value) return;
+      $('history-rows').replaceChildren(...result.rows.map(row => {
+        const div = document.createElement('div'); div.className = 'journal-entry';
+        div.textContent = `#${row.id} · ${row.side} ${row.originalQuantity} @ ${row.price} · ${row.status} · filled ${row.filledQuantity} · ended ${new Date(row.endedAt).toLocaleString()}`;
+        div.title = `${row.placedTxHash} · ${row.cancelReason ?? 'no reported cancellation reason'}`;
+        return div;
+      }));
+      text('history-status', `${result.rows.length} indexed finished orders for ${result.owner}. ${result.note}`);
+    } catch (error) { if (id === state.historyRequestId)
+      text('history-status', `Order history unavailable: ${error.message}. Retry when the indexer is reachable.`); }
+    finally { $('load-order-history').disabled = false; }
+  };
   function invalidate() {
     state.plan = null; $('trade-review').hidden = true;
     $('review-order').disabled = !connected() || state.busy || !!state.pendingHash || !!state.actionPending;
     $('confirm-wallet').disabled = true;
-    text('guard-verdict', 'UNKNOWN');
-    $('guard-verdict').dataset.verdict = 'UNKNOWN';
+    text('guard-verdict', 'AWAITING REVIEW');
+    $('guard-verdict').dataset.verdict = 'AWAITING_REVIEW';
     text('guard-explanation', 'Review runs a fresh trusted-book, margin, gas and contract-simulation preflight.');
     invalidateAction();
   }
   function invalidateAction() {
     state.actionPlan = null; $('action-review').hidden = true; $('confirm-action').disabled = true;
-    $('review-action').disabled = !connected() || state.busy || !!state.pendingHash || !!state.actionPending;
+    $('review-action').disabled = !connected() || state.busy || !!state.pendingHash || !!state.actionPending ||
+      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value);
   }
   function displayAccount() {
     $('wallet-connect').hidden = !!state.account;
@@ -161,6 +257,7 @@
         'wallet-margin-withdrawable']) text(id, '—');
       text('voucher-eligibility', 'Eligibility not checked.'); $('review-voucher').disabled = true;
       text('wallet-balances', 'Wallet balance and MarginBank: not read');
+      text('wallet-permissions', 'Trading permissions: connect a wallet on Hideki 50383.');
       text('wallet-position', 'Connect a wallet to read your own position and open orders.');
       $('wallet-orders').replaceChildren(); }
     renderJournal();
@@ -170,13 +267,23 @@
     if (!connected()) return;
     const id = ++state.requestId;
     const selectedMarket = $('market-select').value;
+    const selectedMode = state.mode;
     text('wallet-balances', 'Reading selected market account (timeout 60 seconds)…');
     text('wallet-position', 'Reading selected market position and orders…');
-    try { const data = await request(`/api/v1/trade/account?account=${encodeURIComponent(state.account)}&market=${encodeURIComponent(selectedMarket)}`);
-      if (id !== state.requestId || data.account.toLowerCase() !== state.account.toLowerCase() ||
+    try { const url = delegated() ?
+      `/api/v1/trade/delegated/account?operator=${encodeURIComponent(state.account)}&market=${encodeURIComponent(selectedMarket)}` :
+      `/api/v1/trade/account?account=${encodeURIComponent(state.account)}&market=${encodeURIComponent(selectedMarket)}`;
+      const data = await request(url);
+      if (id !== state.requestId || selectedMode !== state.mode ||
+        data.account.toLowerCase() !== state.account.toLowerCase() ||
         selectedMarket !== $('market-select').value) return;
       state.accountData = data;
-      text('wallet-balances', `STT ${data.gasStt} · USDso ${data.walletUsdso} · allowance ${data.allowance ?? 'UNKNOWN'} · margin free ${data.marginUnlocked} · withdrawable ${data.withdrawable ?? 'UNKNOWN'}`);
+      text('wallet-balances', delegated() ?
+        `Operator gas ${data.gasStt} STT · Wallet 1 free margin ${data.marginUnlocked} USDso · owner ${data.owner}` :
+        `EOA gas ${data.gasStt} STT · wallet USDso ${data.walletUsdso} · allowance ${data.allowance ?? 'UNKNOWN'} · EOA free margin ${data.marginUnlocked}`);
+      text('wallet-permissions', delegated() ?
+        `Pool grants: place ${data.permissions.place ? 'ACTIVE' : 'BLOCKED'} · cancel ${data.permissions.cancel ? 'ACTIVE' : 'BLOCKED'} · reduce ${data.permissions.reduce ? 'ACTIVE' : 'BLOCKED'}. Scope: ${data.permissions.scope}` :
+        'Direct EOA: no delegated grant required. Wallet confirmation required for each action.');
       text('wallet-position', `Position ${data.position.size ?? data.position.sizeBtc} ${data.market?.replace('-PERP', '') ?? 'BTC'} · entry ${data.position.entryPrice} USDso · ${data.openOrders.length} open orders (block ${data.block})`);
       const rows = data.openOrders.map(order => {
         const row = document.createElement('div'); row.className = 'wallet-order-row';
@@ -192,6 +299,10 @@
         return row;
       });
       $('wallet-orders').replaceChildren(...rows);
+      if ($('wallet-action').value === 'CANCEL' && $('action-order-id').value &&
+        !data.openOrders.some(order => order.id === $('action-order-id').value)) {
+        $('action-order-id').value = ''; $('action-order-label').hidden = true; invalidateAction();
+      }
       for (const entry of readJournal()) {
         if (entry.account?.toLowerCase() === data.account.toLowerCase() && entry.market === data.market &&
           entry.action === 'PLACE' && entry.orderId) {
@@ -203,6 +314,8 @@
       }
     } catch (error) { if (id === state.requestId) {
       state.accountData = null; text('wallet-balances', `Account read unavailable: ${error.message}`);
+      text('wallet-permissions', delegated() ? 'Delegated permissions UNKNOWN; trading blocked until retry.' :
+        'Direct balance UNKNOWN; trading blocked until retry.');
       text('wallet-position', 'Position and open orders UNKNOWN. Use Refresh balances or Refresh live data to retry.');
       $('wallet-orders').replaceChildren(); } }
   }
@@ -260,7 +373,9 @@
     const next = Array.isArray(accounts) && /^0x[0-9a-fA-F]{40}$/.test(accounts[0] ?? '') ? accounts[0] : null;
     if (next?.toLowerCase() === state.account?.toLowerCase()) return;
     state.account = next; state.accountData = null; state.funding = null; state.voucherPlan = null;
-    state.requestId++; state.fundingRequestId++; displayAccount();
+    state.requestId++; state.fundingRequestId++; state.historyRequestId++;
+    $('history-rows').replaceChildren(); text('history-status', 'History not requested for this wallet.');
+    displayAccount();
     if (connected()) { loadAccount(); loadFunding(); }
     if (next) request(`/api/v1/wallet/identity?account=${encodeURIComponent(next)}`).then(identity => {
       if (state.account?.toLowerCase() === identity.account.toLowerCase()) text('wallet-full-address', identity.account);
@@ -434,8 +549,10 @@
     state.sizedQuantity = null; $('use-sized-quantity').disabled = true;
   });
   $('market-select').onchange = () => { state.accountData = null; state.requestId++; invalidate();
+    state.historyRequestId++; $('history-rows').replaceChildren();
+    text('history-status', 'History not requested for this market.');
     panel.querySelector('h2').textContent = `Trade ${$('market-select').value}`;
-    $('trade-review').querySelector('h3').textContent = `Review direct ${$('market-select').value} order`;
+    $('trade-review').querySelector('h3').textContent = `Review ${delegated() ? 'delegated' : 'direct'} ${$('market-select').value} order`;
     status(`Loading verified ${$('market-select').value} market…`);
     text('wallet-position', 'Reading selected market position and orders…');
     if (connected()) loadAccount(); };
@@ -448,23 +565,33 @@
   $('action-amount').oninput = invalidateAction;
   function actionDraft() { return { account: state.account, market: $('market-select').value,
     action: $('wallet-action').value, amount: $('action-amount').value.trim(),
-    orderId: $('action-order-id').value.trim() }; }
+    orderId: $('action-order-id').value.trim(),
+    ...(delegated() ? { mode: 'DELEGATED_PERPS', owner: embeddedAccount } : {}) }; }
   $('review-action').onclick = async () => {
     if (!connected() || state.busy || state.pendingHash || state.actionPending) return;
     invalidateAction(); state.busy = true; $('review-action').disabled = true;
     const draft = actionDraft(); actionStatus('Simulating exact wallet action…', 'warn');
-    try { const plan = await request('/api/v1/trade/action/prepare', { method: 'POST',
+    try { if (delegated() && draft.action !== 'CANCEL') throw Error('Delegated operator cannot approve, deposit or withdraw Wallet 1 funds');
+      const plan = await request(delegated() ? '/api/v1/trade/delegated/cancel/prepare' :
+        '/api/v1/trade/action/prepare', { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
       if (!connected() || draft.account.toLowerCase() !== state.account.toLowerCase() ||
         JSON.stringify(draft) !== JSON.stringify(actionDraft())) throw Error('Wallet or action changed during review.');
       state.actionPlan = { input: draft, result: plan };
-      text('action-details', `${draft.action} · ${draft.market} · ${draft.action === 'CANCEL' ?
-        `order #${draft.orderId}` : `${draft.amount} USDso`} · allowance ${plan.allowance} USDso · wallet ${plan.walletUsdso} USDso · withdrawable ${plan.withdrawable} USDso`);
+      text('action-details', delegated() ?
+        `Cancel Wallet 1 ${draft.market} order #${draft.orderId}. Operator ${draft.account} pays gas; margin stays with ${embeddedAccount}.` :
+        `${draft.action} · ${draft.market} · ${draft.action === 'CANCEL' ?
+          `order #${draft.orderId}` : `${draft.amount} USDso`} · allowance ${plan.allowance} USDso · wallet ${plan.walletUsdso} USDso · withdrawable ${plan.withdrawable} USDso`);
       text('action-contract', `Hideki 50383 · ${plan.transaction.to} · from ${plan.transaction.from} · selector ${plan.transaction.data.slice(0, 10)} · nonce ${plan.transaction.nonce} · max simulated gas ${plan.transaction.maxGasCostStt} STT`);
       $('action-review').hidden = false; $('confirm-action').disabled = false;
       actionStatus('Review the exact action, then confirm explicitly in your wallet.', 'ok');
-    } catch (error) { actionStatus(`Action blocked: ${error.message}`, 'error'); invalidateAction(); }
-    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending; }
+    } catch (error) { actionStatus(`Action blocked: ${error.message}`, 'error'); invalidateAction();
+      if (error.code === 'ORDER_NOT_OPEN' && connected() && delegated() &&
+        draft.account.toLowerCase() === state.account.toLowerCase()) {
+        await loadAccount(); $('load-order-history').click();
+      } }
+    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending ||
+      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value); }
   };
   $('dismiss-action').onclick = () => { invalidateAction(); actionStatus('Wallet action review closed.'); };
   $('confirm-action').onclick = async () => {
@@ -478,38 +605,51 @@
       if (chain !== 50383 || !Array.isArray(accounts) ||
         accounts[0]?.toLowerCase() !== reviewed.input.account.toLowerCase())
         throw Error('Wallet account or network changed.');
-      const fresh = await request('/api/v1/trade/action/prepare', { method: 'POST',
+      const fresh = await request(reviewed.input.mode === 'DELEGATED_PERPS' ?
+        '/api/v1/trade/delegated/cancel/prepare' : '/api/v1/trade/action/prepare', { method: 'POST',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(reviewed.input) });
       const tx = fresh.transaction, prior = reviewed.result.transaction;
-      if (!connected() || JSON.stringify(reviewed.input) !== JSON.stringify(actionDraft()) ||
+      let gasNotice = '';
+      if (reviewed.input.mode === 'DELEGATED_PERPS') {
+        const verdict = compareDelegatedCancel(reviewed, actionDraft(), fresh);
+        if (!connected() || !verdict.ok) throw Error(verdict.issues.map(issue =>
+          `${issue.field}: ${issue.reason}`).join(' ') || 'Wallet changed. Review cancellation again.');
+        if (verdict.gasChanged) gasNotice = ` Fresh simulated gas changed to ${tx.maxGasCostStt} STT within the 0.1 STT cap.`;
+      } else if (!connected() || JSON.stringify(reviewed.input) !== JSON.stringify(actionDraft()) ||
         tx.chainId !== 50383 || tx.value !== '0x0' || tx.from.toLowerCase() !== prior.from.toLowerCase() ||
         tx.to.toLowerCase() !== prior.to.toLowerCase() || tx.data !== prior.data ||
         tx.gas !== prior.gas || tx.nonce !== prior.nonce)
         throw Error('Fresh action preflight differs. Review again.');
-      actionStatus('Waiting for explicit wallet approval…', 'warn');
+      actionStatus(`Waiting for explicit wallet approval…${gasNotice}`, 'warn');
       const hash = await state.provider.request({ method: 'eth_sendTransaction', params: [{
         from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas,
         nonce: `0x${tx.nonce.toString(16)}` }] });
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw Error('Wallet returned an invalid transaction hash.');
       state.actionPlan = null; $('action-review').hidden = true;
-      state.actionPending = { hash, ...reviewed.input }; invalidate();
-      recordJournal(hash, { account: reviewed.input.account, market: reviewed.input.market,
+      state.actionPending = { hash, data: tx.data, ...reviewed.input }; invalidate();
+      recordJournal(hash, { account: reviewed.input.account,
+        owner: reviewed.input.owner ?? reviewed.input.account, mode: reviewed.input.mode ?? 'DIRECT',
+        market: reviewed.input.market,
         action: reviewed.input.action, orderId: reviewed.input.orderId || null, state: 'SUBMITTED' });
       actionStatus(`Submitted ${hash}. Reading independent receipt…`, 'warn');
       for (let attempt = 0; attempt < 12; attempt++) {
-        const receipt = await request(`/api/v1/trade/action/receipt?hash=${encodeURIComponent(hash)}&account=${encodeURIComponent(reviewed.input.account)}&market=${encodeURIComponent(reviewed.input.market)}&action=${reviewed.input.action}&orderId=${encodeURIComponent(reviewed.input.orderId)}&amount=${encodeURIComponent(reviewed.input.amount)}`);
+        const receipt = await request(actionReceiptUrl({ hash, ...reviewed.input }));
         if (receipt.state !== 'PENDING') { state.actionPending = null;
-          recordJournal(hash, { state: receipt.state === 'CONFIRMED' ?
+          recordJournal(hash, { state: receipt.state === 'CANCELLED' ? 'CANCELLED' : receipt.state === 'CONFIRMED' ?
             reviewed.input.action === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED' : receipt.state,
           source: `HIDEKI_RECEIPT_BLOCK_${receipt.block ?? 'UNKNOWN'}` });
           actionStatus(`${reviewed.input.action} ${receipt.state} at block ${receipt.block ?? 'UNKNOWN'}${receipt.reason ? `: ${receipt.reason}` : ''}. Account read follows.`,
-            receipt.state === 'CONFIRMED' ? 'ok' : 'error');
+            ['CONFIRMED', 'CANCELLED'].includes(receipt.state) ? 'ok' : 'error');
           await loadAccount(); invalidateAction(); return; }
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
       actionStatus(`${reviewed.input.action} ${hash} remains pending. Use Refresh to check receipt.`, 'warn');
-    } catch (error) { actionStatus(`Wallet action stopped: ${error.message}`, 'error'); invalidateAction(); }
-    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending;
+    } catch (error) { actionStatus(`Wallet action stopped: ${error.message}`, 'error'); invalidateAction();
+      if (error.code === 'ORDER_NOT_OPEN' && connected() && delegated()) {
+        await loadAccount(); $('load-order-history').click();
+      } }
+    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending ||
+      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value);
       $('review-order').disabled = !connected() || !!state.pendingHash || !!state.actionPending; }
   };
   $('refresh').addEventListener('click', async () => {
@@ -517,18 +657,18 @@
     if (connected()) loadAccount();
     if (state.actionPending) {
       const pending = state.actionPending;
-      try { const receipt = await request(`/api/v1/trade/action/receipt?hash=${encodeURIComponent(pending.hash)}&account=${encodeURIComponent(pending.account)}&market=${encodeURIComponent(pending.market)}&action=${pending.action}&orderId=${encodeURIComponent(pending.orderId)}&amount=${encodeURIComponent(pending.amount)}`);
+      try { const receipt = await request(actionReceiptUrl(pending));
         if (receipt.state === 'PENDING') actionStatus(`${pending.action} ${pending.hash} is still pending.`, 'warn');
         else { state.actionPending = null;
-          recordJournal(pending.hash, { state: receipt.state === 'CONFIRMED' ?
+          recordJournal(pending.hash, { state: receipt.state === 'CANCELLED' ? 'CANCELLED' : receipt.state === 'CONFIRMED' ?
             pending.action === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED' : receipt.state,
           source: `HIDEKI_RECEIPT_BLOCK_${receipt.block ?? 'UNKNOWN'}` });
           actionStatus(`${pending.action} ${receipt.state} at block ${receipt.block ?? 'UNKNOWN'}.`,
-            receipt.state === 'CONFIRMED' ? 'ok' : 'error'); invalidateAction(); }
+            ['CONFIRMED', 'CANCELLED'].includes(receipt.state) ? 'ok' : 'error'); invalidateAction(); }
       } catch (error) { actionStatus(`Action receipt read unavailable: ${error.message}`, 'error'); }
     }
     if (state.pendingHash && state.pendingAccount) {
-      try { const receipt = await request(`/api/v1/trade/receipt?hash=${encodeURIComponent(state.pendingHash)}&account=${encodeURIComponent(state.pendingAccount)}&market=${encodeURIComponent(state.pendingMarket)}`);
+      try { const receipt = await request(`${receiptUrl(state.pendingMode)}?hash=${encodeURIComponent(state.pendingHash)}&account=${encodeURIComponent(state.pendingAccount)}&market=${encodeURIComponent(state.pendingMarket)}${state.pendingMode === 'DELEGATED_PERPS' ? `&action=PLACE&expectedData=${encodeURIComponent(state.pendingData)}` : ''}`);
         if (receipt.state === 'PENDING') status(`Transaction ${state.pendingHash} is still pending.`, 'warn');
         else { recordJournal(state.pendingHash, { state: receipt.state === 'PLACED' ? 'CONFIRMED' : receipt.state,
           orderId: receipt.orderId ?? null, outcomeAtPlacement: receipt.outcomeAtPlacement ?? null,
@@ -537,7 +677,7 @@
           `On-chain placement confirmed: order #${receipt.orderId}, block ${receipt.block}.` :
           `Transaction ${receipt.state}: ${receipt.reason ?? `block ${receipt.block}`}`,
         receipt.state === 'PLACED' ? 'ok' : 'error'); state.pendingHash = null; state.pendingAccount = null;
-          state.pendingMarket = null;
+          state.pendingMarket = null; state.pendingMode = null; state.pendingData = null;
           $('review-order').disabled = !connected(); }
       } catch (error) { status(`Receipt read unavailable: ${error.message}`, 'error'); }
     }
@@ -545,26 +685,31 @@
   $('review-order').onclick = async () => {
     if (!connected() || state.busy || state.pendingHash || state.actionPending) return;
     state.plan = null; $('trade-review').hidden = true; $('confirm-wallet').disabled = true;
+    $('preflight-details').hidden = true; text('preflight-details', '');
     state.busy = true; $('review-order').disabled = true; status('Running Canary Trade Guard and contract simulation…');
     const draft = input();
     try {
-      const plan = await request('/api/v1/trade/prepare', { method: 'POST', headers: { 'content-type': 'application/json' },
+      const plan = await request(prepareUrl(), { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(draft) });
       if (!connected() || draft.account.toLowerCase() !== state.account.toLowerCase() ||
-        draft.market !== $('market-select').value ||
+        draft.market !== $('market-select').value || JSON.stringify(draft) !== JSON.stringify(input()) ||
         draft.side !== state.side || draft.price !== $('limit-price').value.trim() ||
         draft.quantity !== $('quantity').value.trim()) throw Error('Wallet or order changed during review. Start again.');
       text('guard-verdict', plan.guard.verdict);
       $('guard-verdict').dataset.verdict = plan.guard.verdict;
       text('guard-explanation', [...plan.guard.blockers, ...plan.guard.warnings].join(' ') ||
         'Trusted book, price grid, margin size, gas budget and contract simulation passed.');
+      text('margin-preview', plan.marginPreview?.status === 'OK' ?
+        `${plan.marginPreview.lockUsdso} USDso lock · ${plan.marginPreview.initialRequirementUsdso} USDso initial requirement` :
+        plan.marginPreview ? 'UNPRICEABLE' : 'NOT_RUN');
+      text('gas-estimate', plan.transaction ? `${plan.transaction.maxGasCostStt} STT maximum at observed gas price` : 'NOT_RUN');
       if (plan.status !== 'READY' || !plan.transaction) { status('Order blocked by Canary Trade Guard.', 'error'); return; }
       state.plan = { input: draft, result: plan };
-      text('review-details', `${draft.side} ${draft.quantity} ${draft.market} @ ${draft.price} USDso · PostOnly · estimated notional ${
+      text('review-details', `${delegated() ? `Wallet 1 ${embeddedAccount} via operator ${draft.account}` : `Direct EOA ${draft.account}`} · ${draft.side} ${draft.quantity} ${draft.market} @ ${draft.price} USDso · PostOnly · estimated notional ${
         (Number(plan.guard.notionalRaw) / 1e18).toFixed(2)} USDso`);
-      text('review-risk', `Guard ${plan.guard.verdict}. ${plan.guard.warnings.join(' ') || 'No observed caution.'} Max simulated gas cost ${plan.transaction.maxGasCostStt} STT.`);
+      text('review-risk', `Guard ${plan.guard.verdict}. ${plan.guard.warnings.join(' ') || 'No observed caution.'} Current simulated gas cost ${plan.transaction.maxGasCostStt} STT; the hard safety cap is 0.1 STT. A fresh estimate may change within that cap before MetaMask shows the exact transaction.`);
       text('review-contract', `Hideki 50383 · pool ${plan.transaction.to} · from ${plan.transaction.from} · nonce ${plan.transaction.nonce} · expires ${plan.transaction.expiresAt}`);
-      text('review-calldata', `Exact placeOrder calldata: ${plan.transaction.data}`);
+      text('review-calldata', `Exact ${delegated() ? 'placeOrderFor' : 'placeOrder'} calldata: ${plan.transaction.data}`);
       $('trade-review').hidden = false; $('confirm-wallet').disabled = false;
       status('Review the exact wallet order, then confirm explicitly.', 'ok');
     } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate(); }
@@ -575,35 +720,50 @@
     if (!state.plan || state.busy || !connected()) return;
     const reviewed = state.plan; state.busy = true; $('confirm-wallet').disabled = true;
     $('review-order').disabled = true; status('Rechecking market, margin and exact contract call…');
+    let walletPrompted = false;
     try {
       const chain = Number(await state.provider.request({ method: 'eth_chainId' }));
       if (chain !== 50383 || chain !== state.chainId) throw Error('Wallet chain changed.');
       const accounts = await state.provider.request({ method: 'eth_accounts' });
       if (!Array.isArray(accounts) || accounts[0]?.toLowerCase() !== reviewed.input.account.toLowerCase())
         throw Error('Wallet account changed.');
-      const fresh = await request('/api/v1/trade/prepare', { method: 'POST', headers: { 'content-type': 'application/json' },
+      const fresh = await request(reviewed.input.mode === 'DELEGATED_PERPS' ?
+        '/api/v1/trade/delegated/prepare' : '/api/v1/trade/prepare', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...reviewed.input, expiresAt: Date.parse(reviewed.result.transaction.expiresAt) }) });
-      const oldTx = reviewed.result.transaction, tx = fresh.transaction;
-      if (fresh.status !== 'READY' || !tx || tx.data !== oldTx.data ||
-        tx.to.toLowerCase() !== oldTx.to.toLowerCase() || tx.from.toLowerCase() !== oldTx.from.toLowerCase() ||
-        tx.chainId !== 50383 || tx.value !== '0x0' || tx.gas !== oldTx.gas ||
-        tx.nonce !== oldTx.nonce || Date.parse(tx.expiresAt) < Date.now() + 30000 ||
-        !connected()) throw Error('Fresh preflight differs or is blocked. Review a new order.');
-      status('Waiting for your explicit wallet confirmation…', 'warn');
+      const verdict = comparePreflight(reviewed, input(), fresh);
+      const tx = fresh.transaction;
+      const context = verdict.context;
+      const details = `Limit ${context.limitPrice} USDso · fresh bid ${context.bid ?? 'UNKNOWN'} / ask ${context.ask ?? 'UNKNOWN'} · owner free margin ${context.marginUsdso ?? 'UNKNOWN'} USDso · place grant ${context.placeGrant === null ? 'UNKNOWN' : context.placeGrant ? 'ACTIVE' : 'REVOKED'} · simulation ${context.simulation} · fresh estimated max gas ${context.gasEstimateStt ?? 'UNKNOWN'} STT.`;
+      if (!verdict.ok || !connected()) {
+        invalidate();
+        text('guard-verdict', 'RED'); $('guard-verdict').dataset.verdict = 'RED';
+        const reasons = verdict.issues.map(issue => `${issue.field}: ${issue.reason}`);
+        if (!connected()) reasons.push('wallet: Account or network disconnected; connect and review again.');
+        text('guard-explanation', reasons.join(' '));
+        text('preflight-details', `${reasons.join(' ')} ${details} Edit the order or start a fresh review; no transaction was requested.`);
+        $('preflight-details').hidden = false;
+        status(`Wallet trade stopped: ${reasons[0]}`, 'error'); return;
+      }
+      text('preflight-details', `${verdict.changes.map(change => change.reason).join(' ')} ${details}`);
+      $('preflight-details').hidden = false;
+      status('Fresh Trade Guard and simulation passed. Waiting for your explicit wallet confirmation…', 'warn');
+      walletPrompted = true;
       const hash = await state.provider.request({ method: 'eth_sendTransaction', params: [{
         from: tx.from, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas,
         nonce: `0x${tx.nonce.toString(16)}` }] });
       if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw Error('Wallet returned an invalid transaction hash.');
       state.pendingHash = hash; state.pendingAccount = tx.from; state.pendingMarket = reviewed.input.market;
+      state.pendingMode = reviewed.input.mode ?? 'DIRECT'; state.pendingData = tx.data;
       state.plan = null; $('trade-review').hidden = true;
-      recordJournal(hash, { account: tx.from, market: reviewed.input.market, action: 'PLACE',
+      recordJournal(hash, { account: tx.from, owner: reviewed.input.owner ?? tx.from,
+        mode: reviewed.input.mode ?? 'DIRECT', market: reviewed.input.market, action: 'PLACE',
         side: reviewed.input.side, quantity: reviewed.input.quantity, price: reviewed.input.price,
         state: 'SUBMITTED' });
       status(`Submitted ${hash}. Waiting for an independently read receipt…`, 'warn');
       for (let attempt = 0; attempt < 12; attempt++) {
-        const receipt = await request(`/api/v1/trade/receipt?hash=${encodeURIComponent(hash)}&account=${encodeURIComponent(tx.from)}&market=${encodeURIComponent(reviewed.input.market)}`);
+        const receipt = await request(`${receiptUrl(state.pendingMode)}?hash=${encodeURIComponent(hash)}&account=${encodeURIComponent(tx.from)}&market=${encodeURIComponent(reviewed.input.market)}${state.pendingMode === 'DELEGATED_PERPS' ? `&action=PLACE&expectedData=${encodeURIComponent(tx.data)}` : ''}`);
         if (receipt.state !== 'PENDING') { state.pendingHash = null; state.pendingAccount = null;
-          state.pendingMarket = null;
+          state.pendingMarket = null; state.pendingMode = null; state.pendingData = null;
           recordJournal(hash, { state: receipt.state === 'PLACED' ? 'CONFIRMED' : receipt.state,
             orderId: receipt.orderId ?? null, outcomeAtPlacement: receipt.outcomeAtPlacement ?? null,
             source: `HIDEKI_RECEIPT_BLOCK_${receipt.block ?? 'UNKNOWN'}` });
@@ -614,7 +774,20 @@
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
       status(`Transaction ${hash} remains pending. Refresh to recheck the account.`, 'warn');
-    } catch (error) { status(`Wallet trade stopped: ${error.message}`, 'error'); invalidate(); }
+    } catch (error) {
+      invalidate();
+      if (!walletPrompted) {
+        const field = /expir/i.test(error.message) ? 'expiry' : /nonce/i.test(error.message) ? 'nonce' :
+          /market|book|PostOnly/i.test(error.message) ? 'book' : /margin|collateral/i.test(error.message) ? 'margin' :
+            /grant|permission/i.test(error.message) ? 'permission' : /simulation|contract/i.test(error.message) ?
+              'simulation' : 'preflight';
+        text('guard-verdict', 'RED'); $('guard-verdict').dataset.verdict = 'RED';
+        text('guard-explanation', `${field}: ${error.message}`);
+        text('preflight-details', `${field}: ${error.message} Selected limit ${reviewed.input.price} USDso. Fresh book, margin, grant and simulation are UNKNOWN because the preflight did not complete. Review again; no transaction was requested.`);
+        $('preflight-details').hidden = false;
+      }
+      status(`Wallet trade stopped: ${error.message}`, 'error');
+    }
     finally { state.busy = false; $('review-order').disabled = !connected() || !!state.pendingHash; }
   };
   displayAccount(); loadMarkets();

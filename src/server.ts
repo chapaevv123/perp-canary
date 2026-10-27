@@ -33,6 +33,8 @@ import { listVerifiedMarkets, readVerifiedMarket, verifiedMarket } from './marke
 import { assessMarketRadar, calculatePositionSize, type RadarInput } from './canary-intelligence.ts';
 import { prepareVoucherClaim, readEmbeddedOwnership, readVoucherClaimReceipt,
   readWalletFunding } from './wallet-funding.ts';
+import { OrderNotOpenError, prepareDelegatedCancel, prepareDelegatedTrade, readAccountOrderHistory, readDelegatedAccount,
+  readDelegatedReceipt, type DelegatedInput } from './delegated-browser-trade.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -40,6 +42,7 @@ const legacyHtmlPath = resolve('web/legacy.html');
 const terminalCssPath = resolve('web/terminal.css');
 const terminalJsPath = resolve('web/terminal.js');
 const tradingJsPath = resolve('web/trading.js');
+const preflightComparePath = resolve('web/preflight-compare.js');
 const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
@@ -122,6 +125,31 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/api/v1/trade/account') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       json(response, 200, await readDirectAccount(params.get('account') ?? '', params.get('market') ?? undefined));
+    } else if (request.method === 'GET' && path === '/api/v1/trade/delegated/account') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readDelegatedAccount(params.get('operator') ?? '', params.get('market') ?? undefined));
+    } else if (request.method === 'GET' && path === '/api/v1/trade/history') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const mode = params.get('mode');
+      if (mode !== 'DIRECT' && mode !== 'DELEGATED_PERPS') throw Error('Valid account mode required');
+      json(response, 200, await readAccountOrderHistory(params.get('account') ?? '', mode,
+        params.get('market') ?? 'BTC-PERP'));
+    } else if (request.method === 'POST' && path === '/api/v1/trade/delegated/prepare') {
+      const body = await jsonBody(request);
+      if (body.mode !== 'DELEGATED_PERPS' || body.orderType !== 'POST_ONLY' ||
+        !['BUY', 'SELL'].includes(String(body.side))) throw Error('Only delegated BUY/SELL PostOnly is supported');
+      json(response, 200, await prepareDelegatedTrade(body as DelegatedInput));
+    } else if (request.method === 'POST' && path === '/api/v1/trade/delegated/cancel/prepare') {
+      const body = await jsonBody(request);
+      json(response, 200, await prepareDelegatedCancel(String(body.account ?? ''),
+        String(body.market ?? ''), String(body.orderId ?? '')));
+    } else if (request.method === 'GET' && path === '/api/v1/trade/delegated/receipt') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const action = params.get('action');
+      if (action !== 'PLACE' && action !== 'CANCEL') throw Error('Unsupported delegated receipt action');
+      json(response, 200, await readDelegatedReceipt(params.get('hash') ?? '',
+        params.get('account') ?? '', params.get('market') ?? '', action,
+        params.get('orderId') ?? undefined, params.get('expectedData') ?? undefined));
     } else if (request.method === 'GET' && path === '/api/v1/wallet/funding') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       json(response, 200, await readWalletFunding(params.get('account') ?? ''));
@@ -168,6 +196,9 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/trading.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(tradingJsPath));
+    } else if (request.method === 'GET' && path === '/preflight-compare.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(preflightComparePath));
     } else if (request.method === 'GET' && path === '/canary-mark.svg') {
       response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       response.end(await readFile(canaryMarkPath));
@@ -361,15 +392,19 @@ createServer(async (request, response) => {
         latestEvidenceHash: history.at(-1)?.hash ?? null }));
     } else if (request.method === 'GET' && path === '/api/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ service: 'perp-canary', mode: 'READ_ONLY_HTTP', evidence: 'LOCAL_VERIFIED_FILES',
-        transactionSending: 'LOCAL_OWNER_CONFIRMED_CLI_ONLY' }));
+      response.end(JSON.stringify({ service: 'perp-canary', mode: 'LOCAL_UNSIGNED_PREPARE_API',
+        evidence: 'LOCAL_FILES_AND_LIVE_READS', transactionSending: 'INJECTED_WALLET_CONFIRMATION_ONLY',
+        serverBroadcastsUserTrades: false }));
     } else if (path.startsWith('/api/')) {
       json(response, 404, { error: 'API route not found. Restart the Perp Canary server if this page was just updated.' });
     } else {
       response.writeHead(404); response.end('Not found');
     }
   } catch (error) {
-    if (error instanceof PreflightError) {
+    if (error instanceof OrderNotOpenError) {
+      json(response, 409, { error: error.message, code: error.code, orderId: error.orderId,
+        owner: error.owner, market: error.market, readBlock: error.block });
+    } else if (error instanceof PreflightError) {
       json(response, 503, { error: error.message, code: error.code, phase: error.phase,
         transport: error.transport, attempts: error.attempts, retryable: true });
     } else if (error instanceof WalletDiagnosticsReadError) {

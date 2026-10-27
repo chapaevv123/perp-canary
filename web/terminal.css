@@ -174,3 +174,61 @@ button:not(:disabled),a,.brandmark{transition:background-color .16s ease,border-
 .testnet-funding{border-top:1px solid #4b5366;margin-top:17px;padding-top:12px}.testnet-funding h2{font-size:16px;margin:0 0 8px}
 #wallet-identity-warning[data-kind="warn"],#funding-remediation[data-kind="warn"]{color:#ffbf69}
 @media(max-width:1450px){.wallet-details{top:75px}}@media(max-width:550px){.wallet-details{right:2.5%;top:100px}.wallet-details dl div{grid-template-columns:1fr}}
+
+/* M5.3: trading workspace. Evidence remains available through Owner diagnostics. */
+:root{background:#0b101b;color:#eef2fa}
+body{background:radial-gradient(ellipse at 50% -250px,#202a42 0,#0b101b 55%);color:#eef2fa}
+.topbar{min-height:68px;background:#111827;border-bottom-color:#29344b;position:relative;z-index:10}
+.topbar nav a:first-child{border-color:#d9b36f}.topbar nav a{color:#b7c4d7}
+.brand b{color:#e7bd79}.brand small{color:#91a1b9;letter-spacing:.11em}
+.brandmark{box-shadow:0 0 22px #d9b36f22}
+.shell{width:min(96%,1880px)}
+.page-head{padding:20px 0 16px;align-items:center}
+.page-head .eyebrow{color:#d6af74}.page-head p{font-size:13px;color:#9eacc2;margin-top:4px}
+.market-picker{color:#abb9cd}.market-picker select{background:#1b2638;border-color:#465674}
+.summary-grid{gap:10px;margin-bottom:10px}
+.metric,.panel{background:#151d2b;border-color:#29364b;box-shadow:0 6px 24px #05080f25}
+.metric{min-height:84px;padding:13px 16px}.metric strong{font-size:clamp(22px,1.45vw,27px);margin:5px 0 1px}
+.metric label{font-size:11px;color:#8fa0b7}.metric span{font-size:11px;color:#9faec2}
+.main-grid{grid-template-columns:minmax(0,1.55fr) minmax(290px,.78fr) minmax(355px,1fr);align-items:start;gap:10px}
+.panel{padding:17px;border-radius:11px}.panel-head h2{font-size:18px}.panel-head{margin-bottom:12px}
+.trade-panel{grid-column:3;grid-row:auto;position:relative}
+.chart-panel,.book-panel{min-height:0}.chart-wrap{height:225px}.chart-wrap svg{opacity:.78}
+.chart-empty{max-width:430px;padding:13px 17px;background:#1c283adf;border:1px solid #425474;border-radius:8px;color:#d9e1ee}
+.chart-foot{margin-top:4px}.chart-source{color:#a3b2c7}
+.book-row{padding:11px 12px}.book-spread{padding:9px 11px}.depth-row{padding:6px 12px}
+.book-info{margin-top:12px}.badge.green{background:#153e37}.badge.violet{background:#39415f;color:#d9dfff}
+.side-switch{margin:15px 0 10px}.side-switch button{padding:10px}
+.field{margin-top:10px}.field input{margin-top:5px}.trade-facts{margin:12px 0 8px;padding-top:6px}
+.trade-facts div{padding:5px 0}.trade-callout{margin-top:10px}
+.account-mode{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 9px}
+.mode-button{display:grid;gap:3px;text-align:left;padding:10px 12px;border-radius:8px;border:1px solid #3b4b64;background:#1b2535;color:#c7d3e3;font-size:13px;font-weight:800}
+.mode-button span{font-size:11px;font-weight:500;color:#9cadc3}.mode-button.active{border-color:#c89d60;background:#3a302d;color:#ffdcaa;box-shadow:inset 0 0 0 1px #c89d6044}
+.mode-button.active span{color:#e3c7a5}.mode-button:hover{border-color:#cfad79}
+.mode-explanation{font-size:12px;line-height:1.45;color:#aebed1;margin:0 0 9px;overflow-wrap:anywhere}
+.wallet-summary{background:#1a2837;border-color:#364b61;gap:4px;padding:10px 12px}
+.wallet-summary strong{font-size:13px;color:#e7effa}.wallet-summary span{font-size:12px}
+.guard-card{background:#26293a;border-color:#665d83;margin:10px 0}.guard-card>span{color:#d4c2ff}
+.wallet-workflow{margin:9px 0 0;padding-top:0;border:0}.wallet-workflow .wallet-result{margin:8px 0}
+.account-desk{display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin-top:10px}
+.account-desk>*{min-width:0;margin:0;padding:17px;border:1px solid #29364b;border-radius:11px;background:#151d2b;box-shadow:0 6px 24px #05080f25}
+.account-desk .wallet-position{grid-column:1;grid-row:1}.account-desk .wallet-actions{grid-column:2;grid-row:1}
+.account-desk .radar-card{grid-column:1;grid-row:2}.account-desk .sizing-card{grid-column:2;grid-row:2}
+.account-desk .wallet-journal{grid-column:1 / -1;grid-row:3}
+.wallet-position>strong,.wallet-actions>strong,.sizing-card>strong,.wallet-journal>strong{font-size:17px;color:#ecf2fb}
+.wallet-order-row{border-top-color:#34445a}.wallet-order-row span{min-width:0}
+.wallet-journal{font-size:13px}.wallet-journal p{margin:8px 0}.wallet-actions p{margin:0}
+.review-card{background:#202a3b;border-color:#8c7ac4}.button.primary{background:#6c5fe1;border-color:#8074ed}
+.read-only{color:#e4bb79}.network i{background:#51d8ae;box-shadow:0 0 0 3px #51d8ae22}
+.wallet-details{background:#172232;border-color:#4b5b73}
+.main-grid>.account-desk{grid-column:1 / span 2;grid-row:2;margin-top:0}
+.main-grid>.trade-panel{grid-row:1 / span 2}
+.diagnostic-dock{display:grid;grid-template-columns:1.3fr 1fr;gap:10px;margin-top:10px}
+.diagnostic-dock:not(:has(.panel:not([hidden]))){display:none}
+.diagnostic-dock>.risk-panel{grid-column:1 / -1}.diagnostic-dock>.portfolio-panel{grid-column:1}.diagnostic-dock>.proof-panel{grid-column:2}
+@media(max-width:1450px){.main-grid{grid-template-columns:minmax(0,1.1fr) minmax(270px,.8fr)}.chart-panel{grid-column:1;grid-row:1}.book-panel{grid-column:2;grid-row:1}.trade-panel{grid-column:1 / -1;grid-row:2}.chart-wrap{height:225px}}
+@media(max-width:1450px){.main-grid>.trade-panel{grid-column:1 / -1;grid-row:2}.main-grid>.account-desk{grid-column:1 / -1;grid-row:3}}
+@media(max-width:900px){.main-grid{display:grid;grid-template-columns:1fr 1fr}.main-grid>.trade-panel{grid-column:1 / -1;grid-row:2}.account-desk{grid-template-columns:1fr 1fr}.diagnostic-dock{display:block}.diagnostic-dock>.panel{margin-bottom:10px}}
+@media(max-width:700px){.main-grid,.account-desk,.diagnostic-dock{display:block}.main-grid>.panel,.account-desk>*,.diagnostic-dock>.panel{margin-bottom:10px}.chart-wrap{height:210px}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar nav a{font-size:12px}.page-head{align-items:flex-start}}
+@media(max-width:420px){.mode-button{font-size:12px;padding:8px}.mode-button span{font-size:10px}.chart-wrap{height:175px}.metric{min-height:76px}.metric strong{font-size:22px}.head-actions{align-items:flex-start}.wallet-order-row{flex-wrap:wrap}}
+.preflight-details:not([hidden]){margin:10px 0;padding:12px 14px;border:1px solid #806747;border-radius:8px;background:#302921;color:#f4dcbb;font-size:13px;line-height:1.5;overflow-wrap:anywhere}

@@ -58,8 +58,9 @@
     const points = state.observations;
     set('chart-count', `${points.length} observed quote${points.length === 1 ? '' : 's'}`);
     set('chart-start', `Collection started ${state.started.toLocaleTimeString()}`);
-    $('chart-empty').hidden = points.length >= 2;
-    if (points.length === 1) set('chart-empty', 'First trusted mark recorded. The line appears after a second distinct block.');
+    $('chart-empty').hidden = points.length >= 8;
+    if (points.length > 0 && points.length < 8)
+      set('chart-empty', `${points.length} live mark update${points.length === 1 ? '' : 's'} collected. A trace appears after 8 distinct blocks; no historical candles are implied.`);
     if (!points.length) return;
     const prices = points.map(p => p.price);
     const low = Math.min(...prices), high = Math.max(...prices);
@@ -67,7 +68,7 @@
     const span = high - low + pad * 2;
     const x = i => 50 + (points.length === 1 ? 315 : i * 630 / (points.length - 1));
     const y = price => 235 - (price - low + pad) / span * 180;
-    $('chart-line').setAttribute('d', points.length >= 2 ? points.map((p, i) =>
+    $('chart-line').setAttribute('d', points.length >= 8 ? points.map((p, i) =>
       `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.price).toFixed(1)}`).join(' ') : '');
     const dot = $('chart-dot'), last = points.at(-1);
     dot.hidden = false; dot.setAttribute('cx', x(points.length - 1)); dot.setAttribute('cy', y(last.price));
@@ -170,9 +171,8 @@
     state.market = m;
     const fresh = trustedBook();
     set('rpc-pill', `RPC · LIVE #${m.block}`); $('rpc-pill').className = 'pill good';
-    set('bot-pill', m.market === 'BTC-PERP' ?
-      `BOT · ${m.bot.placeGrant === 'SUPPORTED' ? 'GRANTED' : m.bot.placeGrant}` : 'BOT · OWNER BTC ONLY');
-    $('bot-pill').className = `pill ${m.bot.placeGrant === 'SUPPORTED' ? 'good' : 'muted'}`;
+    set('bot-pill', `POOL · ${m.risk?.market === 'SUPPORTED' ? 'TRADEABLE' : 'UNVERIFIED'}`);
+    $('bot-pill').className = `pill ${m.risk?.market === 'SUPPORTED' ? 'good' : 'muted'}`;
     document.querySelector('.chart-panel h2').textContent = `${m.market} price trace`;
     document.querySelector('.book-labels span:last-child').textContent = `QTY (${m.marketMeta?.base ?? 'BTC'})`;
     document.querySelector('.summary-grid .metric span').textContent = `USDso / ${m.marketMeta?.base ?? 'BTC'}`;
@@ -275,7 +275,7 @@
     try { const market = await read(`/api/v1/markets/snapshot?market=${encodeURIComponent(selected)}`);
       if ($('market-select').value === selected) renderMarket(market); }
     catch (error) { set('rpc-pill', 'RPC · UNKNOWN'); $('rpc-pill').className = 'pill bad';
-      set('bot-pill', 'BOT · UNKNOWN'); $('bot-pill').className = 'pill muted';
+      set('bot-pill', 'POOL · UNKNOWN'); $('bot-pill').className = 'pill muted';
       state.market = null; set('mark', '—'); set('market-block', 'UNKNOWN');
       set('book-reasons', error.message); set('chart-source', `Source error: ${error.message}`);
       if (!state.observations.length) set('chart-empty', `Live source unavailable: ${error.message}`);

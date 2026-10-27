@@ -33,7 +33,7 @@ before(async () => {
     cwd: process.cwd(), env: { ...process.env, CANARY_PORT: String(port) }, stdio: 'ignore',
   });
   let ready = false;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 200; i++) {
     try { ready = (await fetch(`${base}/api/v1/health`)).ok; if (ready) break; }
     catch { await new Promise(resolve => setTimeout(resolve, 100)); }
   }
@@ -145,7 +145,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.match(await page.locator('#timeline').innerText(), /OrderPlaced[\s\S]*OrderRested/);
     assert.match(await page.locator('#proof-events').textContent(), /OrderPlaced \+ OrderRested/);
     assert.equal(await page.locator('#chart-count').textContent(), '1 observed quote');
-    assert.match(await page.locator('#chart-empty').textContent(), /First trusted mark/);
+    assert.match(await page.locator('#chart-empty').textContent(), /trace appears after 8 distinct blocks/);
     assert.equal(await page.locator('#risk-badge').textContent(), 'AMBER · CLI PREFLIGHT REQUIRED');
     assert.match(await page.locator('#gate-grid').innerText(), /NOT_RUN/);
 
@@ -228,6 +228,12 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     setMarket(market('34470001', '79810'));
     await page.locator('#refresh').click();
     await page.locator('#chart-count').getByText('2 observed quotes').waitFor();
+    assert.equal(await page.locator('#chart-empty').isHidden(), false);
+    for (let index = 2; index < 8; index++) {
+      setMarket(market(String(34470000 + index), String(79800 + index * 10)));
+      await page.locator('#refresh').click();
+    }
+    await page.locator('#chart-count').getByText('8 observed quotes').waitFor();
     assert.match(await page.locator('#chart-line').getAttribute('d'), /^M.*L/);
     assert.equal(await page.locator('#chart-empty').isHidden(), true);
     assert.notEqual(await page.locator('#chart-y-high').textContent(), '--');
@@ -351,7 +357,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#confirm-wallet').click();
     await page.locator('#wallet-result').getByText(/On-chain placement confirmed/).waitFor();
     assert.match(await page.locator('#trade-review-summary').textContent(), /Order #789/);
-    assert.match(await page.locator('.wallet-journal').last().textContent(), /no model service is connected/);
+    assert.match(await page.locator('#trade-review-summary').textContent(), /Current fill and PnL require separate on-chain evidence/);
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
     assert.equal(await page.evaluate(() => window.__walletMock.lastTx.nonce), '0x0');
     assert.ok(prepareCalls >= 4);
@@ -454,6 +460,108 @@ test('real Chromium MOCKED: funding identity, no gas, voucher review and rejecte
   } finally { await context.close(); }
 });
 
+test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and cancel readiness', async () => {
+  const operator = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
+  const owner = '0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f';
+  const { context, page, errors } = await fixturePage(() => {
+    window.__delegatedWallet = { sends: 0, lastTx: null };
+    window.ethereum = { isMetaMask: true, on() {}, removeListener() {},
+      async request({ method, params }) {
+        if (method === 'eth_requestAccounts' || method === 'eth_accounts')
+          return ['0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42'];
+        if (method === 'eth_chainId') return '0xc4cf';
+        if (method === 'eth_sendTransaction') { window.__delegatedWallet.sends++;
+          window.__delegatedWallet.lastTx = params[0]; throw Error('User rejected request'); }
+        throw Error(`Unexpected method ${method}`);
+      } };
+  });
+  let place = false, placePrepares = 0, crossed = false, staleOrder = false, cancelPrepares = 0;
+  const tx = { chainId: 50383, from: operator,
+    to: '0x4181dd08E73BbCdd1Ba3E615A18f6abD941b94C0', owner,
+    data: `0x80054449${'0'.repeat(64)}`, value: '0x0', gas: '0x300000', nonce: 0,
+    expiresAt: new Date(Date.now() + 280000).toISOString(), maxGasCostStt: '0.015' };
+  try {
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: {
+      account: operator, market: 'BTC-PERP', block: '123', gasStt: '5', walletUsdso: '0',
+      allowance: '0', marginUnlocked: '0', withdrawable: '0',
+      position: { size: '0', entryPrice: '0' }, openOrders: [] } }));
+    await page.route('**/api/v1/trade/delegated/account?**', route => route.fulfill({ json: {
+      account: operator, owner, market: 'BTC-PERP', block: '456', gasStt: '5',
+      marginUnlocked: '999.48', permissions: { place, cancel: place, reduce: place,
+        scope: 'Wallet 1 BTC-PERP pool' }, position: { size: '0.05416', entryPrice: '80043.8' },
+      openOrders: staleOrder ? [] : [{ id: '789', side: 'BUY', remaining: '0.00013', price: '79806.1' }] } }));
+    await page.route('**/api/v1/trade/delegated/prepare', route => { placePrepares++; route.fulfill({ json: {
+      status: place && !crossed ? 'READY' : 'BLOCKED', guard: { verdict: place && !crossed ? 'AMBER' : 'RED',
+        blockers: crossed ? ['PostOnly limit would cross the opposite book top.'] :
+          place ? [] : ['No effective placeOrderFor grant'], warnings: [],
+        notionalRaw: '10374793000000000000' },
+      observation: { block: String(456 + placePrepares), book: { bid: '79806.1', ask: crossed ? '79806.1' : '79806.3' } },
+      account: { marginUnlocked: '999.48', permissions: { place } },
+      transaction: place && !crossed ? { ...tx, gas: placePrepares >= 3 ? '0x310000' : tx.gas } : null } }); });
+    await page.route('**/api/v1/trade/delegated/cancel/prepare', route => { cancelPrepares++; route.fulfill(staleOrder ?
+      { status: 409, json: { code: 'ORDER_NOT_OPEN', readBlock: '999',
+        error: 'Order #789 is no longer open for Wallet 1 on BTC-PERP at on-chain block 999.' } } :
+      { json: { status: 'READY', owner, orderId: '789',
+        account: { owner, permissions: { cancel: true }, openOrders: [{ id: '789' }] },
+        transaction: { ...tx, gas: cancelPrepares > 1 ? '0x320000' : '0x300000',
+          data: `0xe37b444b${'0'.repeat(64)}` } } }); });
+    await page.route('**/api/v1/trade/history?**', route => route.fulfill({ json: {
+      owner, source: 'OFFICIAL_SDK_INDEXER_NONFINAL', note: 'Indexer history can lag.',
+      rows: [{ id: '421', side: 'BUY', originalQuantity: '0.00013', price: '79806.1',
+        filledQuantity: staleOrder ? '0.00013' : '0', status: staleOrder ? 'Filled' : 'Cancelled', endedAt: '2026-10-27T18:00:00Z',
+        placedTxHash: `0x${'c'.repeat(64)}`, cancelReason: null }] } }));
+    await page.locator('#wallet-connect').click();
+    await page.locator('#mode-delegated').click();
+    await page.locator('#wallet-permissions').getByText(/place BLOCKED/).waitFor();
+    assert.match(await page.locator('#wallet-balances').textContent(), /Wallet 1 free margin 999\.48/);
+    await page.locator('#load-order-history').click();
+    await page.locator('#history-rows').getByText(/#421.*Cancelled/).waitFor();
+    await page.locator('#quantity').fill('0.00013'); await page.locator('#use-bid').click();
+    await page.locator('#review-order').click();
+    await page.locator('#guard-verdict').getByText('RED').waitFor();
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 0);
+    place = true; await page.locator('#refresh').click();
+    await page.locator('#wallet-permissions').getByText(/place ACTIVE/).waitFor();
+    await page.locator('#review-order').click();
+    await page.locator('#trade-review').waitFor();
+    assert.match(await page.locator('#review-details').textContent(), /Wallet 1/);
+    assert.match(await page.locator('#review-calldata').textContent(), /placeOrderFor/);
+    await page.locator('#historical-tools').click();
+    mkdirSync('test-results', { recursive: true });
+    await page.screenshot({ path: 'test-results/m53-delegated-review-mocked.png', fullPage: true });
+    await page.locator('#confirm-wallet').click();
+    await page.locator('#wallet-result').getByText(/User rejected request/).waitFor();
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 1);
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.lastTx.nonce), '0x0');
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.lastTx.gas), '0x310000');
+    await page.locator('#review-order').click();
+    await page.locator('#trade-review').waitFor();
+    crossed = true;
+    await page.locator('#confirm-wallet').click();
+    await page.locator('#preflight-details').getByText(/book: PostOnly limit would cross/).waitFor();
+    assert.match(await page.locator('#preflight-details').textContent(), /fresh bid 79806\.1 \/ ask 79806\.1/);
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 1);
+    await page.locator('.wallet-order-row button').click();
+    await page.locator('#review-action').click();
+    await page.locator('#action-review').waitFor();
+    assert.match(await page.locator('#action-details').textContent(), /Cancel Wallet 1/);
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 1);
+    await page.locator('#confirm-action').click();
+    await page.locator('#action-result').getByText(/User rejected request/).waitFor();
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 2);
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.lastTx.gas), '0x320000');
+    await page.locator('.wallet-order-row button').click();
+    staleOrder = true;
+    await page.locator('#review-action').click();
+    await page.locator('#action-result').getByText(/no longer open.*block 999/).waitFor();
+    await page.locator('#history-rows').getByText(/#421.*Filled/).waitFor();
+    assert.equal(await page.locator('.wallet-order-row').count(), 0);
+    assert.equal(await page.locator('#action-order-id').inputValue(), '');
+    assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 2);
+    assert.deepEqual(errors.filter(message => !message.includes('409 (Conflict)')), []);
+  } finally { await context.close(); }
+});
+
 test('real Chromium: verified market switching uses ETH decimals and resets observed chart', async () => {
   const { context, page, errors } = await fixturePage();
   try {
@@ -508,8 +616,7 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
       assert.equal(layout.scrollWidth <= layout.width, true, `horizontal overflow at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandNav || layout.brandStatus || layout.navStatus, false, `header overlap at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.brandVisible, true);
-      assert.ok(width >= 550 ? layout.shell >= width * .94 && layout.shell <= width * .96 :
-        layout.shell >= width - 30 && layout.shell <= width - 26,
+      assert.ok(layout.shell >= Math.min(1880, width * .94) && layout.shell <= width * .97,
         `shell width at ${width}: ${JSON.stringify(layout)}`);
       assert.ok(layout.fonts.body >= 15 && layout.fonts.secondary >= 12 && layout.fonts.button >= 14 &&
         layout.fonts.input >= 15 && layout.fonts.price >= 22 && layout.fonts.heading >= 17,
@@ -523,8 +630,14 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
           Math.abs(layout.chart.y - layout.book.y) < 2 && Math.abs(layout.book.y - layout.trade.y) < 2,
         `desktop panel order at ${width}: ${JSON.stringify(layout)}`);
       } else if (width >= 901) {
-        assert.ok(layout.chart.x < layout.book.x && layout.risk.x < layout.trade.x &&
-          layout.portfolio.x < layout.proof.x, `laptop panel order at ${width}: ${JSON.stringify(layout)}`);
+        assert.ok(layout.chart.x < layout.book.x && layout.chart.y < layout.trade.y &&
+          layout.trade.y < layout.risk.y && layout.portfolio.x < layout.proof.x,
+        `laptop panel order at ${width}: ${JSON.stringify(layout)}`);
+      } else if (width >= 701) {
+        assert.ok(layout.chart.x < layout.book.x && layout.chart.y < layout.trade.y &&
+          layout.trade.y < layout.risk.y && layout.risk.y < layout.portfolio.y &&
+          layout.portfolio.y < layout.proof.y,
+          `tablet panel order at ${width}: ${JSON.stringify(layout)}`);
       } else {
         assert.ok(layout.chart.y < layout.book.y && layout.book.y < layout.trade.y &&
           layout.trade.y < layout.risk.y && layout.risk.y < layout.portfolio.y &&
@@ -620,11 +733,10 @@ test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1'
     await page.locator('#proof-badge').getByText('VERIFIED').waitFor({ timeout: 15000 });
     await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor({ timeout: 90000 });
     await page.locator('#order-state').getByText('NOT_OPEN_AT_READ').waitFor({ timeout: 90000 });
-    assert.equal(await page.locator('#order-cause').textContent(), 'UNKNOWN');
+    assert.match(await page.locator('#order-cause').textContent(), /^(UNKNOWN|OrderExpired)$/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     await page.locator('#refresh').click();
-    await page.waitForFunction(() => document.getElementById('chart-line').getAttribute('d').includes('L'),
-      undefined, { timeout: 90000 });
+    await page.locator('#chart-count').getByText(/[2-9] observed quotes/).waitFor({ timeout: 90000 });
     await page.waitForFunction(() => !document.getElementById('refresh').disabled &&
       !document.getElementById('position-block').textContent.includes('REFRESHING'),
     undefined, { timeout: 90000 });

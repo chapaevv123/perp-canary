@@ -159,6 +159,18 @@ export async function prepareDirectTrade(input: DirectInput) {
   const guard = assessDirectTrade(input, observation);
   if (guard.verdict === 'RED' || !guard.priceRaw || !guard.quantityRaw)
     return { status: 'BLOCKED' as const, guard, observation, transaction: null };
+  const preview = await withSdk(async sdk => sdk.client.previewPerpOrderMargin({
+    pool: market.market.pool, marginBank: market.market.marginBank, account,
+    isBid: input.side === 'BUY', price: BigInt(guard.priceRaw!), quantity: BigInt(guard.quantityRaw!) }));
+  const marginPreview = { status: preview.priceable ? 'OK' as const : 'UNPRICEABLE' as const,
+    sufficient: preview.priceable && preview.sufficient,
+    lockUsdso: preview.priceable ? formatUnits(preview.lockAmount, 18) : null,
+    initialRequirementUsdso: preview.priceable ? formatUnits(preview.imRequirement, 18) : null,
+    asOfBlock: preview.asOfBlock.toString() };
+  if (!marginPreview.sufficient) return { status: 'BLOCKED' as const,
+    guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
+      'MarginBank preview cannot prove sufficient collateral for this order'] },
+    observation, marginPreview, transaction: null };
   const now = Date.now();
   const expiresAt = input.expiresAt ?? now + 300_000;
   if (!Number.isInteger(expiresAt) || expiresAt < now + 30_000 || expiresAt > now + 300_000)
@@ -170,15 +182,16 @@ export async function prepareDirectTrade(input: DirectInput) {
   try { gas = await client.estimateGas({ account, to: market.market.pool, data, value: 0n }); }
   catch (error) { return { status: 'BLOCKED' as const,
     guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
-      `Contract simulation failed: ${error instanceof Error ? error.message : 'UNKNOWN'}`] }, observation, transaction: null }; }
+      `Contract simulation failed: ${error instanceof Error ? error.message : 'UNKNOWN'}`] }, observation,
+    marginPreview, transaction: null }; }
   const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
     client.getTransactionCount({ address: account, blockTag: 'pending' })]);
   const gasLimit = gas * 12n / 10n;
   const maxCost = gasLimit * gasPrice;
   if (maxCost > gasBudget || maxCost > BigInt(user.gasWei)) return { status: 'BLOCKED' as const,
     guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers, 'Simulated gas exceeds wallet balance or 0.1 STT budget.'] },
-    observation, transaction: null };
-  return { status: 'READY' as const, guard, observation,
+    observation, marginPreview, transaction: null };
+  return { status: 'READY' as const, guard, observation, marginPreview,
     transaction: { chainId: 50383, market: market.market.symbol, marketId,
       from: account, to: market.market.pool, data, value: '0x0',
       gas: `0x${gasLimit.toString(16)}`, nonce, expiresAt: new Date(expiresAt).toISOString(),

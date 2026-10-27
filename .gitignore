@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .npm-cache/
 .pulse/
 docs/inventory.md

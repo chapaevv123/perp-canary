@@ -19,6 +19,8 @@ Proof bundle: [`canary-proofs/canary-proof-1793098877887-4230656d134c.json`](../
 
 The on-chain placement receipt has `OrderPlaced` at log index 1 and `OrderRested` at log index 2, both in block **34465778**. A later independent open-order read at block **34476413** found no matching BTC-PERP order; the wallet position was **0.05416 BTC**. An indexed Hideki RPC scan from the placement block through block **34476408** found no matching `OrderFilled`, `OrderCancelled`, `OrderExpired`, `OrderReduced`, or protocol cancellation event. The UI rescans and displays the current scan and read blocks on each refresh. The order's **current state is `NOT_OPEN_AT_READ` and disappearance cause is `UNKNOWN`**. No fill, cancellation, or expiry is asserted. Natural time expiry without an emitted event is a possibility, not a verified cause.
 
+Later update, 2026-10-27: the official SDK indexer reports this historical order as `Expired` with zero filled quantity, and the live terminal's extended indexed event scan displays `OrderExpired`. The `UNKNOWN` conclusion above applies to its earlier scan cutoff, not to all future observations. The new M6.2 MetaMask order is a different ID and was independently verified as **filled**; see [M6.2 investigation](m62-order-cancellation-investigation.md).
+
 Each RPC log is filtered by the exact order ID and BTC-PERP pool; fills are queried in both taker and maker indexed positions. The scan uses bounded 1000-block ranges and an incremental in-memory cursor. An RPC failure keeps the history `UNKNOWN` instead of claiming a complete scan. The current position is always sourced from a fresh SDK on-chain read, never inferred from the order.
 
 Run the independent read-only check:

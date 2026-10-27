@@ -1,16 +1,19 @@
 # Perp Canary
 
-Perp Canary is a multi-market trading terminal and Canary Trade Guard foundation for dreamDEX Perps on Somnia Hideki (chain ID **50383**). It pairs live market and wallet reads with a verifiable proof of the first owner bot order. M5.1 discovers markets through the official SDK and factory, checks selected-market book and grid against the pool, and prepares wallet-confirmed PostOnly orders, bounded margin actions and open-order cancellation. **No M5 user-wallet transaction has been executed or verified on-chain.** The existing owner bot workflow and encrypted keystore remain separate.
+**A guarded dreamDEX perpetual trading terminal on Somnia Hideki testnet (chain 50383).** Perp Canary connects an injected EIP-1193 wallet, discovers verified USDso perp markets, shows fresh pinned order books, and prepares wallet-confirmed PostOnly orders. Canary Trade Guard checks the market, exact account, size, price, margin, pool permission, gas, nonce, expiry, calldata and contract simulation immediately before a wallet prompt.
 
-## Verified first order
+The product has two distinct account modes:
 
-The first owner-approved PostOnly BUY was mined in block **34465778**. The receipt succeeded and the pool emitted `OrderPlaced` and `OrderRested` for order **14978756187852164026332**. Transaction: `0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121`. The independent [proof bundle](canary-proofs/canary-proof-1793098877887-4230656d134c.json) has SHA-256 `4230656d134ca6644edfbbcd5ec97468e8381e672c78bdb5ddd5730518d20e92`.
+| Mode | Who signs and pays gas | Whose margin, orders and position | Supported writes |
+| --- | --- | --- | --- |
+| **Delegated Perps** | Connected operator EOA | Linked dreamDEX Wallet 1 smart account | `placeOrderFor`, `cancelOrderFor` when the selected pool grants each selector |
+| **Direct Wallet** | Connected EOA | The same EOA | `placeOrder`, exact ERC-20 approval, MarginBank deposit/withdraw, `cancelOrder` |
 
-Later on-chain order reads show `NOT_OPEN_AT_READ`, while the wallet position was **0.05416 BTC** at the latest read. An indexed event scan found no fill, cancellation, or expiry event for this order through the scanned block. Its disappearance cause remains **UNKNOWN**. See [verified evidence and lifecycle](docs/verified-onchain-evidence.md).
+The known operator `0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42` and Wallet 1 `0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f` are never merged. On 2026-10-27 this operator placed a delegated BTC-PERP BUY PostOnly order for Wallet 1, and the exact order was subsequently filled. Successful receipts, matching pool events, the official SDK indexer and the position delta were independently checked. See the [reproducible evidence bundle](docs/evidence/verified-delegated-btc-order.json) and [M6.2 investigation](docs/m62-order-cancellation-investigation.md). Current margin and grants require a fresh read; the earlier [M5.3 readiness sample](docs/m53-delegated-readiness.md) is historical.
 
-## Getting started on Windows
+## Run locally
 
-Requires Node.js 22.18+, npm, Windows PowerShell, and access to the configured Hideki RPC/WSS and SDK indexer. Viewing the site needs no wallet password.
+Requires Node.js 22.18+, npm, Chromium/Edge/Chrome for browser tests, and read-only network access to the official Hideki RPC, WSS and SDK indexer.
 
 ```powershell
 cd C:\Users\Win10_Game_OS\Pulse\projects\perp-canary
@@ -18,47 +21,56 @@ npm.cmd ci
 npm.cmd run serve
 ```
 
-Open **http://127.0.0.1:8787**. The terminal is the home page. The earlier research and diagnostics UI remains at `/legacy`.
+Open `http://127.0.0.1:8787`. The local server never receives private keys and never signs a user transaction. For a public demo, trusted HTTPS hosting and separate owner approval are still required.
 
-The terminal keeps its graphite/purple trading layout across desktop and mobile. Its original Canary SVG is served locally as both the header mark and favicon; no external font or image request is required.
+## Trading walkthrough
 
-The chart contains only actual trusted mark quotes collected during that session; it draws a line after the second distinct block. Empty, stale, or failed reads remain visibly marked. Select an SDK and factory verified market, then connect an injected EIP-1193 wallet on Hideki to read that EOA's actual gas, USDso, margin, position and open orders. Enter a BUY or SELL PostOnly limit, then click **Review wallet order**. Canary Trade Guard checks a fresh trusted market, on-chain tick/lot, size, mark deviation, margin, gas and contract simulation. The review shows the exact pool and EOA. Only **Confirm in wallet** asks the wallet to send; the server never signs for users. SELL can add a short and is not reduce-only. Exact amount approval, margin deposit/withdraw and cancellation have separate simulation, review and wallet confirmation. Market/IOC and guaranteed position closing are unavailable. A separate button still copies the owner CLI prepare command for BTC BUY.
+1. Connect MetaMask or another EIP-1193 wallet and check the full address and **Somnia Hideki 50383** in Wallet details.
+2. Select **Delegated Perps** to trade the verified Wallet 1 grant, or **Direct Wallet** to use only EOA margin. The account strip displays the correct gas payer, free margin, permission flags, position and open orders.
+3. Select an SDK/factory verified market. Wait for `TRUSTED` order book and fresh mark. The compact chart shows only mark updates actually observed in this browser session; it waits for eight distinct blocks before drawing a trace.
+4. Choose BUY/LONG or SELL/SHORT, enter a market tick-aligned limit and lot-aligned quantity, and use **Review wallet order**. The supported order type is PostOnly. SELL may add to a short; it is not reduce-only.
+5. Review Canary Trade Guard, owner, operator, exact pool, calldata, nonce, expiry, margin lock and maximum simulated gas cost. **Confirm in wallet** asks the connected wallet for that one transaction. A new preflight must agree with the review.
+6. After a transaction, inspect its independent receipt and current open-order list. A resting order is not called filled. If an order remains open, select **Review cancel** and confirm that separate wallet transaction. **Load order history** reads finished orders from the official SDK indexer, which may lag the chain.
 
-To prepare a new plan, the owner runs `npm.cmd run canary-first-proof` in a local terminal, selects a quoted candidate, reviews the printed plan and its 300-second expiry, then separately runs the exact `bot-execute` command if desired. The CLI asks for `EXECUTE <full plan hash>`, unlocks the local keystore through masked input, and repeats preflight before any signature. No action is automatic. **The first plan has expired and cannot be reused.**
+Direct Wallet funding is separate: Wallet details shows native STT, transferable wallet USDso, free MarginBank collateral and nonwithdrawable paper credit. The verified Hideki STT funding route is the [official Link a Bot flow](https://app.testnet.dreamdex.io/docs/trading/common/link-a-bot); the external EOA can check one-time paper USDso voucher eligibility and review a claim if needed. The Shannon faucet is not a Hideki faucet.
 
-## Confirmed capabilities and limits
+## What is live, and what remains conditional
 
-- Live Hideki mark, pinned SDK + direct RPC best bid/ask, up to five verified contract book levels per side, freshness, block, delegated place grant, wallet position, and open orders.
-- Read-only on-chain event scan for the first order with block and transaction provenance. Missing lifecycle evidence remains `UNKNOWN`.
-- Copy controls for proof and transaction hashes, plan hash, and, only for an unexpired saved plan, the owner CLI command and exact confirmation.
-- Local SHA-256 proof bundle, verified receipt, and evidence timeline. The historical research UI and CLI remain available.
-- Owner CLI PostOnly workflow with 300-second plan expiry, maximum 100 USDso notional, maximum 0.1 STT gas, maximum 1% mark deviation, TRUSTED market snapshot, margin, grants, nonce, simulation, idempotency, and immediate final preflight.
+- **Live reads:** dynamic SDK/factory market discovery (21 tradeable market rows at the 2026-10-27 probe), market status, mark and five-level order book checked against direct RPC at a pinned block; user account balances, permission flags, margin, positions, open orders and optional indexed finished-order history.
+- **Unsigned readiness:** guarded PostOnly BUY/SELL and owner-scoped delegated placement, separate reviewed direct funding actions and order cancellation. Actual wallet signing requires an explicit click and wallet confirmation for each write.
+- **Canary Intelligence:** transparent Trade Guard, in-tab Market Radar, deterministic Smart Position Sizing, in-tab alerts and a local public-hash trade journal. The stop used for sizing is a reference only. There is no model-backed AI Copilot or background alert service.
+- **Verified lifecycle:** one delegated MetaMask placement and its full fill are confirmed on-chain. The position existed before this order; only its 0.00013 BTC increase matches the fill. A live cancellation, direct EOA trade and position close have not been verified. Guaranteed delegated reduce-only close, market/IOC, complete PnL and public hosting are not enabled. The local server must not be advertised as a public trading deployment.
 
-The historical owner-bot risk panel uses `NOT_RUN` for checks that have not been performed for a specific owner plan. The new Canary Trade Guard is specific to a connected EOA and uses GREEN/AMBER/RED/UNKNOWN. A displayed quote never means an order is approved. See the [M5 capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md) for verified methods, implementation status, and remaining blockers to a public trading product.
+The [capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md) and [M5.3 evidence](docs/m53-delegated-readiness.md) separate actual on-chain reads from simulated transactions. The historical bot proof is documented in [verified on-chain evidence](docs/verified-onchain-evidence.md): transaction `0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121` at block 34465778 emitted `OrderPlaced` and `OrderRested`. The original bounded scan left its later cause unknown; a later 2026-10-27 live terminal scan reported `OrderExpired`.
 
-## Documentation
+## Architecture and security
 
-- [Architecture](docs/architecture.md)
-- [M5 trading capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md)
-- [M5.1 continuation report](docs/m51-progress-report.md)
-- [M5.2 wallet architecture and funding audit](docs/m52-wallet-funding.md)
-- [Security model](docs/security-model.md)
-- [Verified on-chain evidence](docs/verified-onchain-evidence.md)
-- [Demo walkthrough](docs/demo-walkthrough.md)
-- [Hackathon submission draft](docs/hackathon-submission-draft.md)
-- [Historical implementation notes](docs/m4-first-proof.md)
+Browser UI → local read-only/unsigned-plan API → official `@somnia-chain/markets-sdk@0.32.1` plus verified Hideki contracts. Only the injected wallet's `eth_sendTransaction` can send a user transaction, after a visible review. Server endpoints neither accept secrets nor broadcast. The historic bot CLI and encrypted keystore remain isolated from browser trading. PostOnly plans have a five-minute expiry, 100 USDso notional cap, 1% mark-deviation cap, 0.1 STT simulated gas cap, fresh book and contract simulation. Grants can be revoked at any time and are re-read at each delegated preflight.
 
-## Development checks
+## Checks
 
 ```powershell
-npm.cmd test
-npm.cmd run test:ui
 npm.cmd run lint
 npm.cmd run typecheck
+npm.cmd test
+npm.cmd run test:ui
+npm.cmd run build
 npm.cmd run verify
-git diff --check
+node --experimental-strip-types scripts/m53-delegated-readiness.ts
 ```
 
-`verify` checks local evidence chains and proof artifacts. These commands do not sign or send a transaction.
+`test:ui` uses Chromium and mocked wallet transactions by default. Set `CANARY_UI_LIVE=1` to add a **read-only** live Hideki browser smoke; it still does not sign. The readiness script only reads and estimates gas. Test fixtures and simulations are separate from the independently verified historical MetaMask trade.
 
-`test:ui` launches installed Chromium, Edge or Chrome against the local server. It checks controls, clipboard, chart rendering, error and stale states, `/legacy`, and layout at 2560×1440, 1920×1080, 1600×900, 1440×900, 1366×768, 1280×800 and 768×1024. Desktop screenshots are written to ignored `test-results/`. For an additional live Hideki browser smoke test, set the task-specific `CANARY_UI_LIVE=1` environment variable in PowerShell before running `npm.cmd run test:ui`; this needs read-only outbound RPC/SDK access.
+## Demo and submission
+
+- [Judge walkthrough and English submission draft](docs/m6-submission-pack.md)
+- [Local demo walkthrough](docs/demo-walkthrough.md)
+- [Live terminal screenshot](docs/screenshots/live-terminal.png) and [mocked delegated review](docs/screenshots/delegated-review-mocked.png)
+- [M5.3 delegated readiness](docs/m53-delegated-readiness.md)
+- [M6.1 live preflight mismatch diagnosis and fix](docs/m61-preflight-fix.md)
+- [M6.2 exact order fill and cancellation investigation](docs/m62-order-cancellation-investigation.md)
+- [M5.2 wallet and funding audit](docs/m52-wallet-funding.md)
+- [Security model](docs/security-model.md)
+- [Historical bot proof](docs/verified-onchain-evidence.md)
+
+No push, deployment or submission is performed by this repository workflow.
