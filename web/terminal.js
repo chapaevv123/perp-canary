@@ -9,6 +9,11 @@
   archiveButton.className = 'button secondary'; archiveButton.textContent = 'Show historical owner evidence';
   archiveButton.setAttribute('aria-expanded', 'false');
   document.querySelector('.head-actions').append(archiveButton);
+  const publicMode = document.body.dataset.publicMode === 'true';
+  if (publicMode) {
+    archiveButton.hidden = true;
+    document.querySelectorAll('a[href="/legacy"]').forEach(link => { link.hidden = true; });
+  }
   const historical = [document.getElementById('risk'), document.getElementById('portfolio'),
     document.getElementById('proof'), document.querySelector('.prepare-command'),
     document.getElementById('copy-prepare'), document.getElementById('copy-feedback')];
@@ -354,7 +359,7 @@
   $('copy-confirmation').onclick = () => { if (state.plan && Date.now() < Date.parse(state.plan.expiresAt))
     copy(`EXECUTE ${state.plan.hash}`, 'Exact confirmation', 'proof-copy-feedback'); };
   updateRisk(); drawChart();
-  read('/api/v1/terminal/proof').then(renderProof).catch(error => {
+  if (!publicMode) read('/api/v1/terminal/proof').then(renderProof).catch(error => {
     $('proof-badge').className = 'badge red'; set('proof-badge', 'UNKNOWN');
     set('proof-events', 'Receipt events unavailable for verification.');
     set('proof-hash', `UNKNOWN: ${error.message}`);

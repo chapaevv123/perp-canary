@@ -27,7 +27,7 @@ Open `http://127.0.0.1:8787`. The local server never receives private keys and n
 
 1. Connect MetaMask or another EIP-1193 wallet and check the full address and **Somnia Hideki 50383** in Wallet details.
 2. Select **Delegated Perps** to trade the verified Wallet 1 grant, or **Direct Wallet** to use only EOA margin. The account strip displays the correct gas payer, free margin, permission flags, position and open orders.
-3. Select an SDK/factory verified market. Wait for `TRUSTED` order book and fresh mark. The compact chart shows only mark updates actually observed in this browser session; it waits for eight distinct blocks before drawing a trace.
+3. Select an SDK/factory verified market. Wait for a `TRUSTED` order book and fresh mark. The chart reads real fill-derived OHLCV from the official SDK indexer, with an explicit unavailable state when history is absent. The session mark trace uses only observed blocks.
 4. Choose BUY/LONG or SELL/SHORT, enter a market tick-aligned limit and lot-aligned quantity, and use **Review wallet order**. The supported order type is PostOnly. SELL may add to a short; it is not reduce-only.
 5. Review Canary Trade Guard, owner, operator, exact pool, calldata, nonce, expiry, margin lock and maximum simulated gas cost. **Confirm in wallet** asks the connected wallet for that one transaction. A new preflight must agree with the review.
 6. After a transaction, inspect its independent receipt and current open-order list. A resting order is not called filled. If an order remains open, select **Review cancel** and confirm that separate wallet transaction. **Load order history** reads finished orders from the official SDK indexer, which may lag the chain.
@@ -64,6 +64,8 @@ node --experimental-strip-types scripts/m53-delegated-readiness.ts
 ## Demo and submission
 
 - [Judge walkthrough and English submission draft](docs/m6-submission-pack.md)
+- [M7 product acceptance](docs/m7-product-acceptance.md), [final report](docs/m7-final-product-report.md), [judge walkthrough](docs/m7-judge-walkthrough.md) and [public deployment runbook](docs/m7-deployment.md)
+- [M7 live terminal](docs/screenshots/m7-terminal-live.png), [mocked terminal](docs/screenshots/m7-terminal-mocked.png) and [verified execution replay](docs/screenshots/m7-replay-verified.png)
 - [Local demo walkthrough](docs/demo-walkthrough.md)
 - [Live terminal screenshot](docs/screenshots/live-terminal.png) and [mocked delegated review](docs/screenshots/delegated-review-mocked.png)
 - [M5.3 delegated readiness](docs/m53-delegated-readiness.md)

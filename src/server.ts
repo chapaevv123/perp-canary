@@ -24,7 +24,7 @@ import { readForensicEvidence } from './delegated-forensics.ts';
 import { buildOrderActionPlan, discoverBtcOrders, inspectOrderAction } from './order-actions.ts';
 import { readOrderActionForensics } from './order-action-forensics.ts';
 import { assessCanary, assessPlanCanary, type CanarySignal } from './canary-safety.ts';
-import { localRequestRejection } from './server-security.ts';
+import { localRequestRejection, publicOrigin, publicRequestRejection, RequestLimiter, securityHeaders } from './server-security.ts';
 import { publicProof, readFirstOrderAccount, readFirstOrderHistory, readFirstProof,
   readTerminalMarket } from './terminal-data.ts';
 import { prepareDirectTrade, prepareWalletAction, readDirectAccount, readDirectReceipt,
@@ -35,6 +35,9 @@ import { prepareVoucherClaim, readEmbeddedOwnership, readVoucherClaimReceipt,
   readWalletFunding } from './wallet-funding.ts';
 import { OrderNotOpenError, prepareDelegatedCancel, prepareDelegatedTrade, readAccountOrderHistory, readDelegatedAccount,
   readDelegatedReceipt, type DelegatedInput } from './delegated-browser-trade.ts';
+import { readMarketCandles, readMarketTrades } from './market-history.ts';
+import { readPositionIntelligence } from './position-intelligence.ts';
+import { readExecutionReplay } from './execution-replay.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -43,6 +46,10 @@ const terminalCssPath = resolve('web/terminal.css');
 const terminalJsPath = resolve('web/terminal.js');
 const tradingJsPath = resolve('web/trading.js');
 const preflightComparePath = resolve('web/preflight-compare.js');
+const positionScenarioPath = resolve('web/position-scenario.js');
+const marketChartPath = resolve('web/market-chart.js');
+const executionReplayPath = resolve('web/execution-replay.js');
+const guardV2Path = resolve('web/guard-v2.js');
 const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
@@ -59,6 +66,8 @@ let refreshing = false;
 const previousRadar = new Map<string, RadarInput>();
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
+const publicSite = publicOrigin();
+const limiter = new RequestLimiter();
 
 async function jsonBody(request: import('node:http').IncomingMessage): Promise<Record<string, unknown>> {
   if (request.headers['content-type']?.split(';')[0] !== 'application/json') throw new Error('Content-Type must be application/json');
@@ -81,17 +90,39 @@ function json(response: import('node:http').ServerResponse, status: number, valu
 }
 
 createServer(async (request, response) => {
-  const path = new URL(request.url ?? '/', 'http://localhost').pathname;
   try {
-    const rejection = localRequestRejection({ host: request.headers.host, origin: request.headers.origin,
-      fetchSite: request.headers['sec-fetch-site'], method: request.method }, port);
+    const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+    for (const [key, value] of Object.entries(securityHeaders(!!publicSite))) response.setHeader(key, value);
+    if ((request.url ?? '').length > 2048) { json(response, 414, { error: 'Request URL too long' }); return; }
+    const rejection = publicSite ? publicRequestRejection({ host: request.headers.host,
+      origin: request.headers.origin, fetchSite: request.headers['sec-fetch-site'],
+      method: request.method, path }, publicSite) :
+      localRequestRejection({ host: request.headers.host, origin: request.headers.origin,
+        fetchSite: request.headers['sec-fetch-site'], method: request.method }, port);
     if (rejection) { json(response, 403, { error: rejection }); return; }
+    if (publicSite) {
+      const forwarded = request.headers['x-forwarded-for'];
+      const address = typeof forwarded === 'string' && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(forwarded) ?
+        forwarded : request.socket.remoteAddress ?? 'unknown';
+      if (!limiter.allow(`${address}:${request.method}`, Date.now(), request.method === 'POST' ? 30 : 180)) {
+        response.setHeader('retry-after', '60'); json(response, 429, { error: 'Request rate limit reached; retry in one minute' }); return;
+      }
+    }
     if (request.method === 'GET' && path === '/api/v1/terminal/proof') {
       json(response, 200, publicProof(await readFirstProof()));
+    } else if (request.method === 'GET' && path === '/api/v1/execution/replay') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readExecutionReplay(params.get('orderId') ?? ''));
     } else if (request.method === 'GET' && path === '/api/v1/terminal/market') {
       json(response, 200, await readTerminalMarket());
     } else if (request.method === 'GET' && path === '/api/v1/markets') {
       json(response, 200, { observedAt: new Date().toISOString(), markets: await listVerifiedMarkets() });
+    } else if (request.method === 'GET' && path === '/api/v1/markets/candles') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readMarketCandles(params.get('market') ?? '', Number(params.get('interval'))));
+    } else if (request.method === 'GET' && path === '/api/v1/markets/trades') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readMarketTrades(params.get('market') ?? ''));
     } else if (request.method === 'GET' && path === '/api/v1/markets/snapshot') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       const snapshot = await readVerifiedMarket(params.get('market') ?? '');
@@ -128,6 +159,10 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/api/v1/trade/delegated/account') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       json(response, 200, await readDelegatedAccount(params.get('operator') ?? '', params.get('market') ?? undefined));
+    } else if (request.method === 'GET' && path === '/api/v1/position/intelligence') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      json(response, 200, await readPositionIntelligence(params.get('account') ?? '',
+        params.get('mode') ?? '', params.get('market') ?? ''));
     } else if (request.method === 'GET' && path === '/api/v1/trade/history') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
       const mode = params.get('mode');
@@ -199,6 +234,18 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/preflight-compare.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(preflightComparePath));
+    } else if (request.method === 'GET' && path === '/position-scenario.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(positionScenarioPath));
+    } else if (request.method === 'GET' && path === '/market-chart.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(marketChartPath));
+    } else if (request.method === 'GET' && path === '/execution-replay.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(executionReplayPath));
+    } else if (request.method === 'GET' && path === '/guard-v2.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(guardV2Path));
     } else if (request.method === 'GET' && path === '/canary-mark.svg') {
       response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       response.end(await readFile(canaryMarkPath));
@@ -361,7 +408,7 @@ createServer(async (request, response) => {
       json(response, 200, { records, head: records.at(-1)?.hash ?? null });
     } else if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      response.end(await readFile(htmlPath));
+      response.end((await readFile(htmlPath, 'utf8')).replace('__PUBLIC_MODE__', publicSite ? 'true' : 'false'));
     } else if (request.method === 'GET' && path === '/legacy') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(legacyHtmlPath));
@@ -392,7 +439,7 @@ createServer(async (request, response) => {
         latestEvidenceHash: history.at(-1)?.hash ?? null }));
     } else if (request.method === 'GET' && path === '/api/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ service: 'perp-canary', mode: 'LOCAL_UNSIGNED_PREPARE_API',
+      response.end(JSON.stringify({ service: 'perp-canary', mode: publicSite ? 'PUBLIC_UNSIGNED_PREPARE_API' : 'LOCAL_UNSIGNED_PREPARE_API',
         evidence: 'LOCAL_FILES_AND_LIVE_READS', transactionSending: 'INJECTED_WALLET_CONFIRMATION_ONLY',
         serverBroadcastsUserTrades: false }));
     } else if (path.startsWith('/api/')) {
@@ -401,7 +448,18 @@ createServer(async (request, response) => {
       response.writeHead(404); response.end('Not found');
     }
   } catch (error) {
-    if (error instanceof OrderNotOpenError) {
+    if (publicSite) {
+      if (error instanceof OrderNotOpenError) {
+        json(response, 409, { error: 'Order is no longer open for the selected account and market',
+          code: error.code, orderId: error.orderId, readBlock: error.block });
+      } else if (error instanceof PreflightError) {
+        json(response, 503, { error: 'Live market or account check is unavailable; retry a fresh review',
+          code: 'LIVE_CHECK_UNAVAILABLE', retryable: true });
+      } else {
+        json(response, 400, { error: 'Request could not be completed; check inputs or retry',
+          code: 'REQUEST_REJECTED' });
+      }
+    } else if (error instanceof OrderNotOpenError) {
       json(response, 409, { error: error.message, code: error.code, orderId: error.orderId,
         owner: error.owner, market: error.market, readBlock: error.block });
     } else if (error instanceof PreflightError) {

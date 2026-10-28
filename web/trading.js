@@ -1,5 +1,7 @@
 /* EIP-1193 direct and owner-delegated flows. The server only reads and prepares unsigned calls. */
 import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js';
+import { priceScenario } from './position-scenario.js';
+import { explainGuard } from './guard-v2.js';
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -7,7 +9,7 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
     side: 'BUY', market: null, plan: null, busy: false, pendingHash: null, pendingAccount: null,
     pendingMarket: null, pendingMode: null, pendingData: null,
     requestId: 0, fundingRequestId: 0, historyRequestId: 0, marketRegistry: [],
-    funding: null, voucherPlan: null, voucherPending: null };
+    funding: null, voucherPlan: null, voucherPending: null, positionRequestId: 0, positionMetrics: null };
   const expectedMetaMask = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
   const embeddedAccount = '0xE350c75b3B152CC5481FFE13c8078Ab35c90b20f';
   const panel = document.querySelector('.trade-panel');
@@ -42,8 +44,10 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
       <p id="radar-details">Waiting for independently checked live data.</p>
       <p id="radar-monitoring">In-tab monitoring active while this page remains open.</p>
       <div id="radar-alerts"></div></div>
-    <div class="guard-card"><span>CANARY TRADE GUARD</span><strong id="guard-verdict">AWAITING REVIEW</strong>
-      <p id="guard-explanation">Enter an order and review it to run fresh book, account, margin, gas and contract checks.</p></div>
+    <div class="guard-card"><span>CANARY TRADE GUARD</span><strong id="guard-verdict">AWAITING REVIEW</strong><b id="guard-decision">UNAVAILABLE</b>
+      <p id="guard-explanation">Enter an order and review it to run fresh book, account, margin, gas and contract checks.</p>
+      <label class="guard-setting">Spread caution above <select id="guard-spread"><option value="10">10 bps</option><option value="25" selected>25 bps</option><option value="50">50 bps</option><option value="100">100 bps</option></select></label>
+      <div id="guard-checks" class="guard-checks" aria-live="polite"></div></div>
     <button id="review-order" class="button primary full" type="button" disabled>Review wallet order</button>
     <div id="trade-review" class="review-card" hidden>
       <h3>Review direct BTC-PERP order</h3><p id="review-details"></p>
@@ -61,7 +65,13 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
       <p id="size-result" role="status" aria-live="polite">Enter capital, risk, a limit entry and stop reference.</p>
       <button id="use-sized-quantity" class="button secondary full" type="button" disabled>Use calculated quantity</button></div>
     <div class="wallet-position"><strong id="position-heading">Your selected-market account</strong><p id="wallet-position">Connect a wallet to read your own position and open orders.</p>
-      <div id="wallet-orders"></div></div>
+      <div id="wallet-orders"></div><div class="position-intelligence"><div class="section-line"><strong>Position intelligence</strong><button id="refresh-position-intelligence" type="button" class="button secondary">Refresh metrics</button></div>
+      <p id="position-intelligence-status" role="status">Connect a wallet to read a pinned on-chain position snapshot.</p>
+      <dl class="position-metrics"><div><dt>Direction / size</dt><dd id="metric-direction">—</dd></div><div><dt>Entry / mark</dt><dd id="metric-prices">—</dd></div>
+      <div><dt>Unrealized PnL</dt><dd id="metric-upnl">Unavailable</dd></div><div><dt>Funding owed</dt><dd id="metric-funding">Unavailable</dd></div>
+      <div><dt>Liquidation reference</dt><dd id="metric-liquidation">Unavailable</dd></div><div><dt>Realized PnL</dt><dd id="metric-realized">Unavailable</dd></div></dl>
+      <label class="scenario-label">If mark price changes by <output id="scenario-percent">0%</output><input id="scenario-slider" type="range" min="-30" max="30" value="0" step="1" disabled></label>
+      <p id="scenario-result">Scenario unavailable until a position and fresh mark are read.</p><p class="small">Price-only estimate against entry. It excludes future funding, fees, liquidation and position changes. SDK metrics use one block; refresh before a decision.</p></div></div>
     <div class="wallet-actions"><strong>Manage margin and orders</strong>
       <p>Each action has its own simulation, review and wallet confirmation. Approval is bounded to the entered amount.</p>
       <label>Action <select id="wallet-action"><option value="APPROVE">Approve exact USDso</option>
@@ -107,6 +117,19 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
   const actionStatus = (message, kind = '') => { $('action-result').textContent = message;
     $('action-result').dataset.kind = kind; };
   const text = (id, value) => { $(id).textContent = value; };
+  function renderGuardV2(plan, draft) {
+    const report = explainGuard(plan, draft, Number($('guard-spread').value));
+    text('guard-decision', report.decision);
+    text('guard-explanation', `${report.nextAction} ${report.blockers?.join(' ') || ''}`.trim());
+    $('guard-checks').replaceChildren(...report.checks.map(check => {
+      const row = document.createElement('div'); row.className = 'guard-check';
+      const name = document.createElement('strong'); name.textContent = `${check.name} · ${check.status}`;
+      const detail = document.createElement('span'); detail.textContent = check.observed;
+      const rule = document.createElement('small'); rule.textContent = `${check.rule} · block ${check.freshness}`;
+      row.append(name, detail, rule); return row;
+    }));
+  }
+  $('guard-spread').onchange = () => { if (state.plan) renderGuardV2(state.plan.result, state.plan.input); };
   const validChain = () => state.chainId === 50383;
   const connected = () => !!state.account && validChain();
   const delegated = () => state.mode === 'DELEGATED_PERPS';
@@ -155,6 +178,47 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
       return body;
     } finally { window.clearTimeout(timer); }
   };
+  function clearPositionIntelligence(message) {
+    state.positionMetrics = null;
+    text('position-intelligence-status', message);
+    for (const id of ['metric-direction', 'metric-prices']) text(id, '—');
+    for (const id of ['metric-upnl', 'metric-funding', 'metric-liquidation', 'metric-realized'])
+      text(id, 'Unavailable');
+    $('scenario-slider').disabled = true;
+    text('scenario-result', 'Scenario unavailable until a position and current mark are read.');
+  }
+  function renderScenario() {
+    const percent = Number($('scenario-slider').value);
+    text('scenario-percent', `${percent > 0 ? '+' : ''}${percent}%`);
+    if (!state.positionMetrics?.scenarioInputs) return;
+    try {
+      const result = priceScenario(state.positionMetrics.scenarioInputs, percent);
+      text('scenario-result', `At ${result.targetPrice} USDso: estimated position PnL ${result.estimatedPnlUsdso} USDso. Price-only scenario, not an execution or liquidation forecast.`);
+    } catch (error) { text('scenario-result', error.message); }
+  }
+  async function loadPositionIntelligence() {
+    if (!connected()) { clearPositionIntelligence('Connect on Somnia Hideki to read position metrics.'); return; }
+    const id = ++state.positionRequestId, account = state.account, mode = state.mode;
+    const market = $('market-select').value;
+    clearPositionIntelligence('Reading one-block SDK position, mark and margin…');
+    try {
+      const data = await request(`/api/v1/position/intelligence?account=${encodeURIComponent(account)}&mode=${encodeURIComponent(mode)}&market=${encodeURIComponent(market)}`);
+      if (id !== state.positionRequestId || account !== state.account || mode !== state.mode ||
+        market !== $('market-select').value) return;
+      state.positionMetrics = data;
+      text('position-intelligence-status', `${data.source} · block ${data.block} · ${new Date(data.observedAt).toLocaleTimeString()}. Free margin ${data.availableMarginUsdso} USDso.`);
+      text('metric-direction', `${data.direction} ${data.size} ${market.replace('-PERP', '')}`);
+      text('metric-prices', data.entryPrice && data.markPrice ? `${data.entryPrice} / ${data.markPrice} USDso` : 'Unavailable: no priced position');
+      text('metric-upnl', data.unrealizedPnlUsdso === null ? `Unavailable: ${data.metricsReason ?? 'no position'}` : `${data.unrealizedPnlUsdso} USDso`);
+      text('metric-funding', data.accruedFundingOwedUsdso === null ? 'Unavailable' : `${data.accruedFundingOwedUsdso} USDso owed since entry`);
+      text('metric-liquidation', data.liquidationPrice === null ? `Unavailable: ${data.liquidationReason}` : `${data.liquidationPrice} USDso · one-market estimate`);
+      text('metric-realized', `Unavailable: ${data.realizedPnlReason}`);
+      $('scenario-slider').disabled = !data.scenarioInputs;
+      renderScenario();
+    } catch (error) { if (id === state.positionRequestId) clearPositionIntelligence(`Position metrics unavailable: ${error.message}. Retry when Hideki RPC responds.`); }
+  }
+  $('scenario-slider').addEventListener('input', renderScenario);
+  $('refresh-position-intelligence').onclick = loadPositionIntelligence;
   function input() { return { account: state.account, market: $('market-select').value,
     side: state.side, orderType: 'POST_ONLY',
     price: $('limit-price').value.trim(), quantity: $('quantity').value.trim(),
@@ -164,6 +228,7 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
       status('Finish or refresh the pending wallet transaction before switching accounts.', 'warn'); return;
     }
     state.mode = mode; state.accountData = null; state.requestId++;
+    state.positionRequestId++; state.positionMetrics = null;
     state.historyRequestId++; $('history-rows').replaceChildren();
     text('history-status', 'History not requested for this account mode.');
     $('mode-direct').classList.toggle('active', !delegated());
@@ -187,6 +252,7 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
     text('wallet-permissions', delegated() ? 'Checking pool grant…' : 'Direct EOA: no operator grant required.');
     text('wallet-position', 'Reading selected market position and orders…');
     $('wallet-orders').replaceChildren();
+    clearPositionIntelligence('Reading selected account position…');
     invalidate(); if (connected()) loadAccount();
   }
   $('mode-direct').onclick = () => switchMode('DIRECT');
@@ -217,6 +283,7 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
     $('confirm-wallet').disabled = true;
     text('guard-verdict', 'AWAITING REVIEW');
     $('guard-verdict').dataset.verdict = 'AWAITING_REVIEW';
+    text('guard-decision', 'UNAVAILABLE'); $('guard-checks').replaceChildren();
     text('guard-explanation', 'Review runs a fresh trusted-book, margin, gas and contract-simulation preflight.');
     invalidateAction();
   }
@@ -312,12 +379,13 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
             state: 'UNKNOWN', source: `NOT_OPEN_AT_BLOCK_${data.block}` });
         }
       }
+      loadPositionIntelligence();
     } catch (error) { if (id === state.requestId) {
       state.accountData = null; text('wallet-balances', `Account read unavailable: ${error.message}`);
       text('wallet-permissions', delegated() ? 'Delegated permissions UNKNOWN; trading blocked until retry.' :
         'Direct balance UNKNOWN; trading blocked until retry.');
       text('wallet-position', 'Position and open orders UNKNOWN. Use Refresh balances or Refresh live data to retry.');
-      $('wallet-orders').replaceChildren(); } }
+      $('wallet-orders').replaceChildren(); clearPositionIntelligence('Position metrics unavailable until the selected account read succeeds.'); } }
   }
   async function loadFunding() {
     if (!connected()) { text('wallet-details-status', 'Switch to Hideki 50383 before reading funding.'); return; }
@@ -697,8 +765,7 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
         draft.quantity !== $('quantity').value.trim()) throw Error('Wallet or order changed during review. Start again.');
       text('guard-verdict', plan.guard.verdict);
       $('guard-verdict').dataset.verdict = plan.guard.verdict;
-      text('guard-explanation', [...plan.guard.blockers, ...plan.guard.warnings].join(' ') ||
-        'Trusted book, price grid, margin size, gas budget and contract simulation passed.');
+      renderGuardV2(plan, draft);
       text('margin-preview', plan.marginPreview?.status === 'OK' ?
         `${plan.marginPreview.lockUsdso} USDso lock · ${plan.marginPreview.initialRequirementUsdso} USDso initial requirement` :
         plan.marginPreview ? 'UNPRICEABLE' : 'NOT_RUN');
@@ -712,7 +779,8 @@ import { compareDelegatedCancel, comparePreflight } from './preflight-compare.js
       text('review-calldata', `Exact ${delegated() ? 'placeOrderFor' : 'placeOrder'} calldata: ${plan.transaction.data}`);
       $('trade-review').hidden = false; $('confirm-wallet').disabled = false;
       status('Review the exact wallet order, then confirm explicitly.', 'ok');
-    } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate(); }
+    } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate();
+      text('guard-decision', 'UNAVAILABLE'); text('guard-explanation', `Fresh checks could not complete: ${error.message}. Retry after market and RPC recover.`); }
     finally { state.busy = false; $('review-order').disabled = !connected() || !!state.pendingHash; }
   };
   $('dismiss-review').onclick = () => { invalidate(); status('Order review closed.'); };

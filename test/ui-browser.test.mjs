@@ -105,6 +105,17 @@ async function fixturePage(initScript) {
     eth.bot.placeGrant = 'NOT_APPLICABLE';
     route.fulfill({ json: eth });
   });
+  await page.route('**/api/v1/markets/candles?**', route => route.fulfill({ json: {
+    status: 'UNAVAILABLE', reason: 'MOCKED fixture has no historical candles',
+    source: 'MOCKED', observedAt: new Date().toISOString(), candles: [] } }));
+  await page.route('**/api/v1/markets/trades?**', route => route.fulfill({ json: {
+    status: 'UNAVAILABLE', source: 'MOCKED', observedAt: new Date().toISOString(), trades: [] } }));
+  await page.route('**/api/v1/position/intelligence?**', route => route.fulfill({ json: {
+    source: 'MOCKED', block: '123', observedAt: new Date().toISOString(),
+    availableMarginUsdso: '50', direction: 'FLAT', size: '0', entryPrice: null,
+    markPrice: null, unrealizedPnlUsdso: null, accruedFundingOwedUsdso: null,
+    liquidationPrice: null, liquidationReason: 'No position', realizedPnlReason: 'Unavailable in fixture',
+    metricsReason: 'No position', scenarioInputs: null } }));
   await page.route('**/api/v1/terminal/plan', route => route.fulfill({
     contentType: 'application/json; charset=utf-8', body: JSON.stringify(plan),
   }));
@@ -266,6 +277,23 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#mark').textContent(), '—');
     assert.ok(errors.some(error => error.includes('503')), 'expected network failure is visible in console');
     assert.deepEqual(errors.filter(error => !error.includes('503')), []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: M7 unavailable history and verified execution replay', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    await page.locator('#candle-status').getByText(/History unavailable/).waitFor();
+    assert.equal(await page.locator('#candle-canvas').isHidden(), true);
+    await page.locator('.replay-trigger').click();
+    await page.locator('#replay-steps').getByText(/OrderFilled/).waitFor();
+    assert.match(await page.locator('#replay-steps').innerText(), /NOT_RECORDED_FOR_THIS_ORDER/);
+    assert.match(await page.locator('#replay-steps').innerText(), /0\.05416.*0\.05429/);
+    mkdirSync('docs/screenshots', { recursive: true });
+    await page.locator('.execution-replay').screenshot({ path: 'docs/screenshots/m7-replay-verified.png' });
+    await page.locator('#replay-close').click();
+    await page.screenshot({ path: 'docs/screenshots/m7-terminal-mocked.png', fullPage: true });
+    assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
 
@@ -567,7 +595,7 @@ test('real Chromium: verified market switching uses ETH decimals and resets obse
   try {
     assert.equal(await page.locator('#market-select option').count(), 2);
     await page.locator('#market-select').selectOption('ETH-PERP');
-    await page.locator('.chart-panel h2').getByText('ETH-PERP price trace').waitFor();
+    await page.locator('.chart-panel h2').getByText('ETH-PERP live mark trace').waitFor();
     assert.equal(await page.locator('#mark').textContent(), '2,346.15');
     assert.equal(await page.locator('#chart-count').textContent(), '1 observed quote');
     assert.match(await page.locator('.book-labels').textContent(), /QTY \(ETH\)/);

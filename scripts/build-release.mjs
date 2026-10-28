@@ -13,13 +13,16 @@ for (const name of ['authorization-evidence', 'execution-evidence', 'bot-evidenc
   'bot-execution-ledger', 'bot-execution-forensics', 'bot-order-action-forensics']) {
   await mkdir(resolve(target, name), { recursive: true });
 }
+await mkdir(resolve(target, 'docs/evidence'), { recursive: true });
+await cp(resolve(root, 'docs/evidence/verified-delegated-btc-order.json'),
+  resolve(target, 'docs/evidence/verified-delegated-btc-order.json'));
 const digest = createHash('sha256').update(await readFile(resolve(target, 'web/index.html'))).digest('hex');
 await writeFile(resolve(target, 'build-manifest.json'), JSON.stringify({
   schema: 'perp-canary/local-release/v1',
   source: 'local workspace',
   indexSha256: digest,
   runtime: 'Node.js 22.18+',
-  note: 'Loopback-only package. Public hosting requires separate security review and explicit owner approval.'
+  note: 'Loopback Node service. Public mode requires an approved HTTPS reverse proxy, CANARY_PUBLIC_ORIGIN and owner approval before deployment.'
 }, null, 2) + '\n');
 console.log(`Local release package: ${target}`);
 console.log('To run: cd dist; npm ci --omit=dev; npm run serve');

@@ -16,7 +16,7 @@
     "canary-status": "node --experimental-strip-types src/first-proof-status-cli.ts",
     "canary-proof": "node --experimental-strip-types src/canary-proof-cli.ts",
     "canary-verify": "node --experimental-strip-types src/canary-verify-cli.ts",
-    "test": "node --experimental-strip-types --test test/*.test.ts test/preflight-compare.test.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/preflight-compare.test.mjs test/m7-browser-logic.test.mjs",
     "test:ui": "node --test test/ui-browser.test.mjs",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node scripts/build-release.mjs",

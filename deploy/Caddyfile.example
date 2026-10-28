@@ -1,0 +1,9 @@
+# Replace terminal.example.org with the approved domain, then configure matching
+# CANARY_PUBLIC_ORIGIN=https://terminal.example.org on the Node service.
+terminal.example.org {
+  encode zstd gzip
+  reverse_proxy 127.0.0.1:8787 {
+    header_up Host {host}
+    header_up X-Forwarded-For {remote_host}
+  }
+}
