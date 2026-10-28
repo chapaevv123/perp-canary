@@ -1,5 +1,4 @@
 import { formatUnits, parseUnits } from 'viem';
-import { MAX_NOTIONAL_WEI } from './delegated-plan.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET } from './trade-forensics.ts';
 import { validateMarketSnapshot } from './market-integrity.ts';
 import type { inspectTradingAuthorization } from './trading-authorization.ts';
@@ -34,11 +33,8 @@ export function ownerBuyLimitReasons(observation: PriceObservation, priceText: s
     reasons.push('BUY limit exceeds 1% of mark');
   if (quantity < min || lot <= 0n || quantity % lot !== 0n) reasons.push('Quantity below minimum or off lot grid');
   const notional = price * quantity / 10n ** 8n;
-  if (notional <= 0n || notional > MAX_NOTIONAL_WEI) reasons.push('Order notional outside 100 USDso budget');
-  if (observation.marginBankUnlocked === 'UNKNOWN' ||
-    !/^\d+(?:\.\d+)?$/.test(observation.marginBankUnlocked) ||
-    parseUnits(observation.marginBankUnlocked, 18) < notional)
-    reasons.push('Available margin below selected order notional or unknown');
+  if (notional <= 0n) reasons.push('Order notional must be positive');
+  // Gross notional is not the initial-margin requirement. The exact SDK preview runs in preparation.
   return reasons;
 }
 export function priceReport(observation: PriceObservation, now = Date.now()): PriceReport {
@@ -84,11 +80,7 @@ export function priceReport(observation: PriceObservation, now = Date.now()): Pr
     if (price <= 0n || price >= ask || price >= bid) issues.push('Suggested BUY would cross or is not below bid');
     if (mark <= 0n || (price > mark ? price - mark : mark - price) * 10_000n > mark * 100n)
       issues.push('Suggested limit exceeds 1% of mark');
-    if (notional <= 0n || notional > MAX_NOTIONAL_WEI) issues.push('Order exceeds 100 USDso notional or is zero');
-    if (observation.marginBankUnlocked === 'UNKNOWN' ||
-      !/^\d+(?:\.\d+)?$/.test(observation.marginBankUnlocked) ||
-      parseUnits(observation.marginBankUnlocked, 18) < notional)
-      issues.push('Available margin below order notional or unknown');
+    if (notional <= 0n) issues.push('Order notional must be positive');
     return { offsetBps, price: formatUnits(price, 18), notional: formatUnits(notional, 18),
       status: issues.length ? 'BLOCKED' as const : 'CANDIDATE' as const, reasons: issues };
   });

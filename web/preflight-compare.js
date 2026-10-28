@@ -3,7 +3,7 @@ export function comparePreflight(reviewed, currentInput, fresh, now = Date.now()
   const issues = [], changes = [];
   const fail = (field, reason) => issues.push({ field, material: true, reason });
   const oldInput = reviewed.input, oldTx = reviewed.result.transaction, tx = fresh?.transaction;
-  for (const field of ['mode', 'account', 'owner', 'market', 'side', 'orderType', 'price', 'quantity']) {
+  for (const field of ['mode', 'account', 'owner', 'market', 'side', 'orderType', 'price', 'quantity', 'customMaxNotional']) {
     const before = oldInput[field] ?? null, after = currentInput[field] ?? null;
     if (before !== after) fail(field, `${field} changed from ${before} to ${after}; review again.`);
   }

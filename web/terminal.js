@@ -162,7 +162,13 @@
         throw Error(`${state.side} PostOnly would cross the opposite book top.`);
       const deviation = price > mark ? price - mark : mark - price;
       if (mark <= 0n || deviation * 10000n > mark * 100n) throw Error('Limit is more than 1% from mark.');
-      if (notional > 100n * 10n ** 18n) throw Error('Notional exceeds the 100 USDso limit.');
+      const custom = window.__canaryTradingLimit;
+      if (custom?.enabled) {
+        const amount = custom.amount;
+        if (!/^\d+(?:\.\d{1,18})?$/.test(amount ?? '') || decimalRaw(amount, 18) <= 0n)
+          throw Error('Enter a positive custom maximum under Wallet & permissions.');
+        if (notional > decimalRaw(amount, 18)) throw Error(`Notional exceeds your custom ${amount} USDso maximum.`);
+      }
       if (notional <= 0n) throw Error('Notional must be positive.');
     } catch (error) { set('trade-error', error.message); return; }
     const normalizedPrice = rawDecimal(price, 18), normalizedQuantity = rawDecimal(quantity, m.grid.baseDecimals ?? 8);
@@ -347,6 +353,10 @@
     updateBookFreshness(); loadMarket();
   });
   function selectSide(side) {
+    if (state.side !== side) {
+      $('limit-price').value = '';
+      $('limit-price').dispatchEvent(new Event('input', { bubbles: true }));
+    }
     state.side = side;
     $('buy').classList.toggle('selected', side === 'BUY'); $('sell').classList.toggle('selected', side === 'SELL');
     $('buy').setAttribute('aria-pressed', String(side === 'BUY'));

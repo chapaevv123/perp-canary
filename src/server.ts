@@ -157,7 +157,8 @@ createServer(async (request, response) => {
         quoteDecimals: market.quoteDecimals, lotSizeRaw: market.lotSizeRaw,
         minQuantityRaw: market.minQuantityRaw, initialMarginBps: market.initialMarginBps,
         tickSizeRaw: market.tickSizeRaw, absoluteRiskUsdso: body.absoluteRiskUsdso ? String(body.absoluteRiskUsdso) : undefined,
-        availableMarginUsdso: body.availableMarginUsdso ? String(body.availableMarginUsdso) : undefined }));
+        availableMarginUsdso: body.availableMarginUsdso ? String(body.availableMarginUsdso) : undefined,
+        customMaxNotional: body.customMaxNotional === undefined ? undefined : String(body.customMaxNotional) }));
     } else if (request.method === 'GET' && path === '/api/v1/terminal/history') {
       json(response, 200, await readFirstOrderHistory());
     } else if (request.method === 'GET' && path === '/api/v1/terminal/account') {

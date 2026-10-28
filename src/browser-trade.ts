@@ -7,6 +7,7 @@ import { withSnapshotSdk } from './lifecycle.ts';
 import { RPC, readRpcHead } from './rpc-health.ts';
 import { BTC_POOL, HIDEKI_MARGIN_BANK } from './trade-forensics.ts';
 import { readVerifiedMarket, verifiedMarket } from './market-registry.ts';
+import { customNotionalLimit } from './trading-limit.ts';
 
 export const DIRECT_PLACE_ABI = parseAbi([
   'function placeOrder(bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) returns (bool success,uint128 orderId)',
@@ -20,12 +21,11 @@ const erc20Abi = parseAbi(['function balanceOf(address) view returns (uint256)',
   'function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)']);
 const poolAbi = parseAbi(['function marginBank() view returns (address)']);
 const bankWriteAbi = parseAbi(['function deposit(uint256)', 'function withdraw(uint256)']);
-const limit = 100n * 10n ** 18n;
 const gasBudget = 10n ** 17n;
 const COLLATERAL = '0xed7993A74dAe1e6656B704A424DcD8711aAf4F72';
 
 export type DirectInput = { account: string; market?: string; side: 'BUY' | 'SELL'; price: string; quantity: string;
-  orderType: 'POST_ONLY'; expiresAt?: number };
+  orderType: 'POST_ONLY'; customMaxNotional?: string; expiresAt?: number };
 export type TradeObservation = {
   chainId: number; observedAt: string; block: string; pool: string; marginBank: string;
   expectedPool?: string;
@@ -48,6 +48,9 @@ export function assessDirectTrade(input: DirectInput, o: TradeObservation, now =
   if (o.chainId !== 50383 || o.pool.toLowerCase() !== (o.expectedPool ?? BTC_POOL).toLowerCase() ||
     o.marginBank.toLowerCase() !== HIDEKI_MARGIN_BANK.toLowerCase()) blockers.push('Wrong network or unverified BTC-PERP contracts.');
   if (input.orderType !== 'POST_ONLY' || !['BUY', 'SELL'].includes(input.side)) blockers.push('Unsupported side or order type.');
+  let customMax: bigint | null = null;
+  try { customMax = customNotionalLimit(input.customMaxNotional); }
+  catch { blockers.push('Custom maximum must be a positive USDso amount.'); }
   const age = now - Date.parse(o.book.observedAt ?? '');
   const observationAge = now - Date.parse(o.observedAt);
   if (o.book.status !== 'TRUSTED' || !Number.isFinite(age) || age < 0 || age > 30_000 ||
@@ -64,7 +67,9 @@ export function assessDirectTrade(input: DirectInput, o: TradeObservation, now =
     const tick = BigInt(o.grid.tickSizeRaw), lot = BigInt(o.grid.lotSizeRaw), min = BigInt(o.grid.minQuantityRaw);
     if (tick <= 0n || lot <= 0n || min <= 0n || price % tick !== 0n || quantity < min || quantity % lot !== 0n)
       blockers.push('Price or quantity is off the verified tick/lot grid.');
-    if (notional <= 0n || notional > limit) blockers.push('Order exceeds the 100 USDso safety limit.');
+    if (notional <= 0n) blockers.push('Order notional must be positive.');
+    if (customMax !== null && notional > customMax)
+      blockers.push(`Order exceeds your custom ${input.customMaxNotional} USDso maximum.`);
     const mark = parseUnits(o.mark ?? '', 18);
     if (mark <= 0n || (price > mark ? price - mark : mark - price) * 100n > mark)
       blockers.push('Limit price differs from mark by more than 1%.');
@@ -263,7 +268,7 @@ export async function prepareWalletAction(input: WalletActionInput) {
   } else {
     if (!input.amount || !/^\d+(?:\.\d+)?$/.test(input.amount)) throw Error('Enter a positive USDso amount');
     amountRaw = parseUnits(input.amount, 18);
-    if (amountRaw <= 0n || amountRaw > limit) throw Error('Margin action limited to 0–100 USDso per review');
+    if (amountRaw <= 0n) throw Error('Margin action amount must be positive');
     if (input.action === 'APPROVE') {
       if (BigInt(user.allowanceRaw) >= amountRaw) throw Error('Existing allowance already covers this amount');
       to = user.collateral;

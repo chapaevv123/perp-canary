@@ -10,7 +10,6 @@ import { MAX_PLACE_PLAN_OBSERVATION_SPAN_MS } from './place-plan-config.ts';
 
 type Observation = Awaited<ReturnType<typeof inspectTradingAuthorization>>;
 export const PLACE_ABI = parseAbi(['function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)']);
-export const MAX_NOTIONAL_WEI = 100n * 10n ** 18n;
 export const MAX_GAS_LIMIT = 10_000_000n;
 export const MAX_GAS_COST_WEI = 100_000_000_000_000_000n; // 0.1 STT
 export function positionEffect(side: 'BUY' | 'SELL', quantity: string, beforeRaw: string): {
@@ -32,7 +31,7 @@ export type PreparedPlan = { schema: 'perp-canary/delegated-plan/v2'; status: 'P
   bookTops?: MarketBookSnapshot;
   positionSizeBeforeRaw: string;
   transaction: { from: string; to: string; data: Hex; value: '0' } | null;
-  risk: { maxNotionalWei: string; orderNotionalWei: string; gasLimit: string;
+  risk: { maxNotionalWei: string | null; orderNotionalWei: string; gasLimit: string;
     estimatedGasUnits: string; gasPriceWei: string; maxGasCostWei: string; marginBankUnlocked: string };
   checks: { chain: boolean; market: boolean; permission: boolean; margin: boolean;
     gas: boolean; simulation: boolean; fresh: boolean; notional: boolean; targetAndCalldata: boolean };
@@ -84,7 +83,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
     simulation: observation.simulation.status === 'SUPPORTED' && (!postOnly || nonMarketable),
     fresh: now >= Date.parse(observation.observedAt) && now - Date.parse(observation.observedAt) <= 30_000 &&
       !!unsigned && Date.parse(unsigned.expiresAt) > now + 15_000,
-    notional: orderNotional > 0n && orderNotional <= MAX_NOTIONAL_WEI,
+    notional: orderNotional > 0n,
     targetAndCalldata: !!unsigned && same(unsigned.from, observation.candidateOperator) &&
       same(unsigned.to, BTC_POOL) && unsigned.value === '0' &&
       same(observation.tradingWallet, OWNER_TRADING_WALLET) &&
@@ -128,7 +127,7 @@ export function buildPreparedPlan(observation: Observation, input: { side: 'BUY'
     positionSizeBeforeRaw: observation.positionSizeRaw,
     transaction: unsigned ? { from: unsigned.from, to: unsigned.to, data: unsigned.data, value: '0' as const } : null,
     ...(diagnostic ? { diagnostic } : {}),
-    risk: { maxNotionalWei: MAX_NOTIONAL_WEI.toString(), orderNotionalWei: orderNotional.toString(),
+    risk: { maxNotionalWei: null, orderNotionalWei: orderNotional.toString(),
       gasLimit: gasLimit.toString(), estimatedGasUnits: estimated.toString(), gasPriceWei: gasPrice.toString(),
       maxGasCostWei: gasCost.toString(), marginBankUnlocked: observation.marginBankUnlocked }, checks, blockers };
   return { ...body, hash: sha256(body) };
@@ -139,8 +138,8 @@ export function verifyPreparedPlan(plan: PreparedPlan): void {
   try {
     const gasLimit = BigInt(plan.risk.gasLimit);
     const notional = parseUnits(plan.price, 18) * parseUnits(plan.quantity, 8) / 10n ** 8n;
-    riskValid = plan.risk.maxNotionalWei === MAX_NOTIONAL_WEI.toString() &&
-      notional > 0n && notional <= MAX_NOTIONAL_WEI &&
+    const planLimit = plan.risk.maxNotionalWei === null ? null : BigInt(plan.risk.maxNotionalWei);
+    riskValid = notional > 0n && (planLimit === null || planLimit > 0n && notional <= planLimit) &&
       plan.risk.orderNotionalWei === notional.toString() && gasLimit > 0n && gasLimit <= MAX_GAS_LIMIT &&
       BigInt(plan.risk.maxGasCostWei) === gasLimit * BigInt(plan.risk.gasPriceWei) &&
       BigInt(plan.risk.maxGasCostWei) <= MAX_GAS_COST_WEI &&

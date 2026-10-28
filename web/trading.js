@@ -105,6 +105,7 @@ import { explainGuard } from './guard-v2.js';
   const permissionDetails = document.createElement('details'); permissionDetails.id = 'wallet-permission-details';
   permissionDetails.className = 'wallet-permission-details';
   permissionDetails.innerHTML = '<summary>Wallet & permissions</summary><dl class="permission-facts"><div><dt>Connected EOA</dt><dd id="permission-eoa">Not connected</dd></div><div><dt>Margin owner</dt><dd id="permission-owner">Not connected</dd></div><div><dt>Chain</dt><dd id="permission-chain">Not checked</dd></div><div><dt>Operator gas</dt><dd id="permission-gas">Not read</dd></div><div><dt>Free margin</dt><dd id="permission-margin">Not read</dd></div><div><dt>Selected pool grant</dt><dd id="permission-grant">Not checked</dd></div><div><dt>Evidence</dt><dd id="permission-evidence">Awaiting on-chain account read</dd></div><div><dt>Last refresh</dt><dd id="permission-refreshed">Not read</dd></div></dl>';
+  permissionDetails.insertAdjacentHTML('beforeend', '<section class="trading-limits"><strong>Trading Limits</strong><label><input id="custom-limit-enabled" type="checkbox" disabled> Enable custom maximum order notional</label><label>Maximum (USDso) <input id="custom-limit-amount" type="text" inputmode="decimal" placeholder="Positive amount" disabled></label><p id="custom-limit-status" role="status">No custom maximum. Connect a wallet to save account settings.</p></section>');
   permissionDetails.append($('mode-explanation'), $('wallet-summary'));
   const walletWarning = document.createElement('p'); walletWarning.id = 'wallet-warning';
   walletWarning.className = 'wallet-warning'; walletWarning.hidden = true;
@@ -194,6 +195,39 @@ import { explainGuard } from './guard-v2.js';
   const text = (id, value) => { $(id).textContent = value; };
   const displayNumber = (value, digits = 6) => value == null || value === '' ? 'Unavailable' : Number.isFinite(Number(value)) ?
     Number(value).toLocaleString('en-US', { maximumFractionDigits: digits }) : String(value);
+  const limitKey = () => state.account ? `perp-canary/trading-limit/v1/${state.mode}/${state.account.toLowerCase()}` : null;
+  function validCustomLimit(value) { return /^\d+(?:\.\d{1,18})?$/.test(value) &&
+    /^\d*[1-9]/.test(value.replace('.', '')); }
+  function syncTradingLimit() {
+    let saved = null;
+    try { saved = JSON.parse(window.localStorage.getItem(limitKey()) || 'null'); } catch { /* unavailable */ }
+    $('custom-limit-enabled').disabled = !state.account;
+    $('custom-limit-enabled').checked = !!state.account && saved?.enabled === true;
+    $('custom-limit-amount').value = typeof saved?.amount === 'string' ? saved.amount : '';
+    $('custom-limit-amount').disabled = !$('custom-limit-enabled').checked;
+    updateTradingLimit(false);
+  }
+  function updateTradingLimit(save = true) {
+    const enabled = $('custom-limit-enabled').checked && !!state.account;
+    const amount = $('custom-limit-amount').value.trim();
+    $('custom-limit-amount').disabled = !enabled;
+    window.__canaryTradingLimit = { enabled, amount };
+    const valid = !enabled || validCustomLimit(amount);
+    text('custom-limit-status', !state.account ? 'No custom maximum. Connect a wallet to save account settings.' :
+      !enabled ? 'No custom maximum. Protocol, margin and wallet checks still apply.' :
+        valid ? `Active maximum: ${amount} USDso per order for this wallet and account mode.` :
+          'Enter a positive USDso amount; order review is blocked until valid.');
+    if (save && valid && limitKey()) {
+      try { window.localStorage.setItem(limitKey(), JSON.stringify({ enabled, amount: enabled ? amount : '' })); }
+      catch { text('custom-limit-status', 'Browser storage unavailable; this limit will not persist after reload.'); }
+    }
+    state.sizedQuantity = null;
+    $('use-sized-quantity').disabled = true;
+    $('quantity').dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  $('custom-limit-enabled').onchange = () => updateTradingLimit();
+  $('custom-limit-amount').oninput = () => updateTradingLimit();
+  syncTradingLimit();
   function positionCell(id, value, digits = 6) {
     const node = $(id);
     node.textContent = value == null ? 'Unavailable' : displayNumber(value, digits);
@@ -375,12 +409,14 @@ import { explainGuard } from './guard-v2.js';
   function input() { return { account: state.account, market: $('market-select').value,
     side: state.side, orderType: 'POST_ONLY',
     price: $('limit-price').value.trim(), quantity: $('quantity').value.trim(),
+    ...(window.__canaryTradingLimit?.enabled ? { customMaxNotional: window.__canaryTradingLimit.amount } : {}),
     ...(delegated() ? { mode: 'DELEGATED_PERPS', owner: embeddedAccount } : {}) }; }
   function switchMode(mode) {
     if (state.busy || state.pendingHash || state.actionPending) {
       status('Finish or refresh the pending wallet transaction before switching accounts.', 'warn'); return;
     }
     state.mode = mode; state.accountData = null; state.requestId++;
+    syncTradingLimit();
     accountSummary();
     state.positionRequestId++; state.positionMetrics = null;
     state.historyRequestId++; $('history-rows').replaceChildren();
@@ -596,6 +632,7 @@ import { explainGuard } from './guard-v2.js';
     const next = Array.isArray(accounts) && /^0x[0-9a-fA-F]{40}$/.test(accounts[0] ?? '') ? accounts[0] : null;
     if (next?.toLowerCase() === state.account?.toLowerCase()) return;
     state.account = next; state.accountData = null; state.funding = null; state.voucherPlan = null;
+    syncTradingLimit();
     state.requestId++; state.fundingRequestId++; state.historyRequestId++;
     $('history-rows').replaceChildren(); text('history-status', 'History not requested for this wallet.');
     displayAccount();
@@ -647,6 +684,7 @@ import { explainGuard } from './guard-v2.js';
     state.provider?.removeListener?.('accountsChanged', onAccounts);
     state.provider?.removeListener?.('chainChanged', onChain);
     state.provider = null; state.account = null; state.chainId = null; state.accountData = null;
+    syncTradingLimit();
     state.requestId++; state.fundingRequestId++; displayAccount(); status('Application wallet session disconnected.');
   };
   $('wallet-identity').onclick = () => { const open = $('wallet-details').hidden;
@@ -757,7 +795,8 @@ import { explainGuard } from './guard-v2.js';
     const draft = { market: $('market-select').value, side: state.side, capital: $('size-capital').value.trim(),
       riskPercent: $('size-risk').value.trim(), entry: $('limit-price').value.trim(),
       stop: $('size-stop').value.trim(), absoluteRiskUsdso: $('size-absolute-risk').value.trim(),
-      availableMarginUsdso: state.accountData?.marginUnlocked ?? '' };
+      availableMarginUsdso: state.accountData?.marginUnlocked ?? '',
+      ...(window.__canaryTradingLimit?.enabled ? { customMaxNotional: window.__canaryTradingLimit.amount } : {}) };
     try { const result = await request('/api/v1/intelligence/size', { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
       if (draft.market !== $('market-select').value || draft.side !== state.side ||

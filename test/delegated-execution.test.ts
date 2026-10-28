@@ -88,14 +88,16 @@ test('valid official BTC-PERP calldata yields an immutable prepared plan', () =>
   assert.throws(() => verifyPreparedPlan({ ...p, price: '1' }), /integrity/);
   assert.throws(() => verifyPreparedPlan({ ...p, pool: BOT }), /integrity/);
 });
-test('unauthorized, revoked, wrong chain, market, margin, gas, simulation and oversize are blocked', () => {
+test('unauthorized, revoked, wrong chain, market, margin, gas and SDK oversize are blocked', () => {
   const denied = { permissions: { place: { effective: { status: 'BLOCKED' } } } };
   for (const change of [denied, { chainId: 1 }, { market: 'ETH-PERP' },
     { marginSufficient: false }, { operatorGasStt: '0' }, { simulation: { status: 'BLOCKED' } },
     { planBlockers: ['SDK maximum placeable size unavailable or exceeded'] }])
     assert.equal(buildPreparedPlan(observation(change), input).status, 'BLOCKED');
   const big = { ...input, quantity: '0.01' };
-  assert.equal(buildPreparedPlan(observation({}, big), big).status, 'BLOCKED');
+  const larger = buildPreparedPlan(observation({}, big), big);
+  assert.equal(larger.checks.notional, true);
+  assert.equal(larger.risk.maxNotionalWei, null);
 });
 test('IOC no-fill revert is primary; absent unsigned transaction explains dependent failed gates', () => {
   const failure = classifySimulationFailure({ cause: { cause: { code: 3,

@@ -1,9 +1,11 @@
 import { formatUnits, parseUnits } from 'viem';
+import { customNotionalLimit } from './trading-limit.ts';
 
 export type SizingInput = { capital: string; riskPercent: string; entry: string; stop: string;
   side: 'BUY' | 'SELL';
   baseDecimals: number; quoteDecimals: number; lotSizeRaw: string; minQuantityRaw: string;
-  initialMarginBps: number; tickSizeRaw?: string; absoluteRiskUsdso?: string; availableMarginUsdso?: string };
+  initialMarginBps: number; tickSizeRaw?: string; absoluteRiskUsdso?: string; availableMarginUsdso?: string;
+  customMaxNotional?: string };
 export function calculatePositionSize(input: SizingInput) {
   const decimal = (value: string) => /^\d+(?:\.\d+)?$/.test(value);
   if (![input.capital, input.entry, input.stop].every(decimal) ||
@@ -29,15 +31,15 @@ export function calculatePositionSize(input: SizingInput) {
   const delta = entry > stop ? entry - stop : stop - entry;
   let quantity = riskBudget * 10n ** BigInt(input.baseDecimals) / delta;
   quantity = quantity / lot * lot;
-  const guardMax = (100n * 10n ** 18n * 10n ** BigInt(input.baseDecimals) / entry) / lot * lot;
-  const cappedByGuard = quantity > guardMax;
-  if (cappedByGuard) quantity = guardMax;
   const notional = quantity * entry / 10n ** BigInt(input.baseDecimals);
+  const customMax = customNotionalLimit(input.customMaxNotional);
+  const exceedsCustomLimit = customMax !== null && notional > customMax;
   const lossAtStop = quantity * delta / 10n ** BigInt(input.baseDecimals);
   const initialMargin = (notional * BigInt(input.initialMarginBps) + 9999n) / 10_000n;
   const marginAvailable = input.availableMarginUsdso && decimal(input.availableMarginUsdso) ?
     parseUnits(input.availableMarginUsdso, 18) : null;
   return { status: quantity < minimum || notional <= 0n ? 'BELOW_MINIMUM' as const :
+    exceedsCustomLimit ? 'EXCEEDS_CUSTOM_LIMIT' as const :
     marginAvailable !== null && initialMargin > marginAvailable ? 'INSUFFICIENT_MARGIN_ESTIMATE' as const : 'CALCULATED' as const,
     confidence: 'ESTIMATED' as const,
     quantity: formatUnits(quantity, input.baseDecimals), quantityRaw: quantity.toString(),
@@ -45,10 +47,10 @@ export function calculatePositionSize(input: SizingInput) {
     riskBudgetUsdso: formatUnits(riskBudget, 18), lossAtStopUsdso: formatUnits(lossAtStop, 18),
     invalidationDistancePercent: formatUnits(delta * 10_000n / entry, 2),
     marginAvailableUsdso: marginAvailable === null ? null : formatUnits(marginAvailable, 18),
-    cappedByGuard,
+    exceedsCustomLimit,
     maximumMarketLeverageX: 10_000 / input.initialMarginBps,
     assumptions: `Stop is a reference only, not an installed order. Actual loss can exceed this estimate. Excludes funding, liquidation, slippage and fees.${
-      cappedByGuard ? ' Quantity capped by the 100 USDso Canary Trade Guard limit.' : ''}` };
+      exceedsCustomLimit ? ` Calculated quantity exceeds your ${input.customMaxNotional} USDso custom maximum; it was not changed.` : ''}` };
 }
 
 export type RadarInput = { status: string; mark: string | null; bid: string | null; ask: string | null;

@@ -160,7 +160,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     await page.locator('#buy').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'quantity');
     assert.equal(await page.locator('#sell').isEnabled(), true);
-    assert.equal(await page.locator('#order-type').isDisabled(), true);
+    assert.equal(await page.locator('#order-type').textContent(), 'PostOnly (supported)');
     assert.equal(await page.locator('#use-ask').isDisabled(), true);
     assert.match(await page.locator('#use-ask').getAttribute('title'), /would cross the spread/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
@@ -200,7 +200,8 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     assert.match(await page.locator('#trade-error').textContent(), /Quantity: Enter a positive decimal/);
     await page.locator('#quantity').fill('1');
-    assert.match(await page.locator('#trade-error').textContent(), /100 USDso limit/);
+    assert.match(await page.locator('#notional').textContent(), /79,407\.00 USDso/);
+    assert.match(await page.locator('#trade-error').textContent(), /Input preview only/);
     await page.locator('#quantity').fill('0.00013');
     await page.locator('#limit-price').fill('79806.15');
     assert.match(await page.locator('#trade-error').textContent(), /tick grid/);
@@ -462,6 +463,96 @@ test('real Chromium: missing injected wallet cannot review or submit', async () 
   } finally { await context.close(); }
 });
 
+test('real Chromium MOCKED: custom maximum persists per wallet and mode without changing quantity', async () => {
+  const account = '0x1111111111111111111111111111111111111111';
+  const { context, page, errors } = await fixturePage(() => {
+    window.__testWallet = { account: '0x1111111111111111111111111111111111111111', sends: 0 };
+    window.ethereum = { on() {}, removeListener() {}, async request({ method }) {
+      if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [window.__testWallet.account];
+      if (method === 'eth_chainId') return '0xc4cf';
+      if (method === 'eth_sendTransaction') { window.__testWallet.sends++; throw Error('Unexpected wallet send'); }
+      throw Error(`Unexpected wallet method ${method}`);
+    } };
+  });
+  let reviewedLimit = null;
+  try {
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: {
+      account, market: 'BTC-PERP', block: '123', gasStt: '1', marginUnlocked: '10000',
+      walletUsdso: '10000', allowance: '0', withdrawable: '10000',
+      position: { size: '0', entryPrice: '0' }, openOrders: [] } }));
+    await page.route('**/api/v1/trade/prepare', route => {
+      reviewedLimit = JSON.parse(route.request().postData()).customMaxNotional;
+      route.fulfill({ json: { status: 'BLOCKED', guard: { verdict: 'RED', blockers: ['Mocked margin unavailable'], warnings: [] },
+        observation: { chainId: 50383, account: { address: account }, book: { status: 'TRUSTED' } }, transaction: null } });
+    });
+    await page.locator('#wallet-connect').click();
+    await page.locator('#wallet-permission-details').evaluate(node => { node.open = true; });
+    assert.match(await page.locator('#custom-limit-status').textContent(), /No custom maximum/);
+    await page.locator('#quantity').fill('0.01253');
+    await page.locator('#use-bid').click();
+    assert.match(await page.locator('#trade-error').textContent(), /Input preview only/);
+    await page.locator('#custom-limit-enabled').check();
+    await page.locator('#custom-limit-amount').fill('500');
+    assert.match(await page.locator('#trade-error').textContent(), /custom 500 USDso maximum/);
+    assert.equal(await page.locator('#quantity').inputValue(), '0.01253');
+    await page.locator('#custom-limit-amount').fill('2000');
+    await page.locator('#review-order').click();
+    assert.equal(reviewedLimit, '2000');
+    assert.equal(await page.evaluate(() => window.__testWallet.sends), 0);
+    await page.locator('#custom-limit-amount').fill('500');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#wallet-connect').click();
+    await page.locator('#wallet-permission-details').evaluate(node => { node.open = true; });
+    assert.equal(await page.locator('#custom-limit-enabled').isChecked(), true);
+    assert.equal(await page.locator('#custom-limit-amount').inputValue(), '500');
+    await page.locator('#mode-delegated').click();
+    assert.equal(await page.locator('#custom-limit-enabled').isChecked(), false);
+    await page.locator('#mode-direct').click();
+    assert.equal(await page.locator('#custom-limit-amount').inputValue(), '500');
+    assert.equal(await page.evaluate(() => window.__testWallet.sends), 0);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: position sizing applies exact market quantity and clears on market change', async () => {
+  const { context, page, errors } = await fixturePage();
+  const requests = [];
+  try {
+    await page.route('**/api/v1/intelligence/size', route => {
+      const draft = JSON.parse(route.request().postData()); requests.push(draft);
+      route.fulfill({ json: { confidence: 'ESTIMATED', status: 'CALCULATED',
+        quantity: draft.market === 'BTC-PERP' ? '0.00124' : '0.02',
+        riskBudgetUsdso: '1', notionalUsdso: '98.959564', initialMarginUsdso: '4.9479782',
+        invalidationDistancePercent: '1.01', lossAtStopUsdso: '0.999564',
+        assumptions: 'Stop is a reference only, not an installed order.' } });
+    });
+    await page.locator('#workspace-plan').click();
+    await page.locator('#limit-price').fill('79806.1');
+    await page.locator('#size-capital').fill('100');
+    await page.locator('#size-risk').fill('1');
+    await page.locator('#size-stop').fill('79000');
+    await page.locator('#calculate-size').click();
+    await page.locator('#size-result').getByText(/0\.00124 BTC/).waitFor();
+    assert.match(await page.locator('#size-result').textContent(), /0\.00124 BTC.*not an installed order/);
+    await page.locator('#use-sized-quantity').click();
+    assert.equal(await page.locator('#quantity').inputValue(), '0.00124');
+    assert.equal(requests[0].market, 'BTC-PERP');
+    await page.locator('#market-select').selectOption('ETH-PERP');
+    await page.locator('#book-badge').getByText('TRUSTED').waitFor();
+    assert.equal(await page.locator('#quantity').inputValue(), '');
+    assert.equal(await page.locator('#use-sized-quantity').isDisabled(), true);
+    await page.locator('#limit-price').fill('2346.4');
+    await page.locator('#size-stop').fill('2300');
+    await page.locator('#calculate-size').click();
+    await page.locator('#size-result').getByText(/0\.02 ETH/).waitFor();
+    assert.match(await page.locator('#size-result').textContent(), /0\.02 ETH/);
+    await page.locator('#use-sized-quantity').click();
+    assert.equal(await page.locator('#quantity').inputValue(), '0.02');
+    assert.equal(requests[1].market, 'ETH-PERP');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('real Chromium MOCKED: funding identity, no gas, voucher review and rejected signature', async () => {
   const account = '0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42';
   const { context, page, errors } = await fixturePage(() => {
@@ -696,6 +787,37 @@ test('real Chromium: market dialog search, favorites, recents and rapid switchin
   } finally { await context.close(); }
 });
 
+test('real Chromium MOCKED: BTC ETH BNB BTC clears market-specific order inputs', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    await page.route('**/api/v1/markets', route => route.fulfill({ json: { markets: [
+      { id: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0', symbol: 'BTC-PERP', marketType: 'PERP', base: 'BTC', quote: 'USDso', status: 'TRADEABLE' },
+      { id: '0xd6cb1dd58580b84d76068ac21594219ce03aeddf', symbol: 'ETH-PERP', marketType: 'PERP', base: 'ETH', quote: 'USDso', status: 'TRADEABLE' },
+      { id: '0x2222222222222222222222222222222222222222', symbol: 'BNB-PERP', marketType: 'PERP', base: 'BNB', quote: 'USDso', status: 'TRADEABLE' },
+    ] } }));
+    await page.route('**/api/v1/markets/snapshot?market=BNB-PERP', route => {
+      const bnb = market('34470002', '600');
+      bnb.market = 'BNB-PERP'; bnb.book.bid = '599.99'; bnb.book.ask = '600.01';
+      bnb.grid = { tickSizeRaw: '10000000000000000', lotSizeRaw: '100000000000000',
+        minQuantityRaw: '1000000000000000', baseDecimals: 18, quoteDecimals: 18 };
+      bnb.marketMeta = { base: 'BNB', quote: 'USDso' };
+      route.fulfill({ json: bnb });
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#market-select option').nth(2).waitFor({ state: 'attached' });
+    for (const [symbol, base] of [['ETH-PERP', 'ETH'], ['BNB-PERP', 'BNB'], ['BTC-PERP', 'BTC']]) {
+      await page.locator('#quantity').fill('0.01');
+      await page.locator('#limit-price').fill('100');
+      await page.locator('#market-select').selectOption(symbol);
+      await page.locator('#book-badge').getByText('TRUSTED').waitFor();
+      assert.equal(await page.locator('#quantity').inputValue(), '');
+      assert.equal(await page.locator('#limit-price').inputValue(), '');
+      assert.match(await page.locator('.book-labels').textContent(), new RegExp(`QTY \\(${base}\\)`));
+    }
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('real Chromium MOCKED: candle zoom, pan, tooltip, timeframe and reset', async () => {
   const { context, page, errors } = await fixturePage();
   try {
@@ -735,6 +857,11 @@ test('real Chromium MOCKED: Radar scans markets, alerts cross once, and workspac
     assert.match(await page.locator('#radar-rows').textContent(), /BTC-PERP/);
     assert.match(await page.locator('#radar-rows').textContent(), /ETH-PERP/);
     assert.match(await page.locator('#radar-rows').textContent(), /\/100/);
+    await page.locator('#radar-sort').selectOption('spread');
+    assert.equal(await page.locator('#radar-rows tr').count(), 2);
+    await page.locator('#radar-filter').selectOption('fresh');
+    assert.equal(await page.locator('#radar-rows tr').count(), 2);
+    await page.locator('#radar-filter').selectOption('all');
     mkdirSync('docs/screenshots', { recursive: true });
     await page.screenshot({ path: 'docs/screenshots/m8-market-radar-fixture.png', fullPage: true });
     setMarket({ error: 'BTC source temporarily unavailable' });
@@ -811,6 +938,13 @@ test('real Chromium MOCKED: journal pages deduplicate, filter, export and keep s
     assert.equal(await page.locator('#journal-rows tr').count(), 2);
     assert.match(await page.locator('#journal-analytics').textContent(), /0\.05000000 BTC/);
     await page.locator('#journal-status-filter').selectOption('Filled');
+    assert.equal(await page.locator('#journal-rows tr').count(), 1);
+    await page.locator('#journal-date-filter').fill('2026-10-28');
+    assert.equal(await page.locator('#journal-rows tr').count(), 0);
+    await page.locator('#journal-date-filter').fill('');
+    await page.locator('#journal-evidence-filter').selectOption('verified');
+    assert.equal(await page.locator('#journal-rows tr').count(), 0);
+    await page.locator('#journal-evidence-filter').selectOption('all');
     assert.equal(await page.locator('#journal-rows tr').count(), 1);
     assert.equal(await page.locator('#journal-export').isEnabled(), true);
     const download = page.waitForEvent('download');

@@ -37,3 +37,17 @@ test('direct trade guard blocks stale books, wrong chain, missing gas and insuff
   const noMargin = observation(); noMargin.account.maxPlaceable = false;
   assert.match(assessDirectTrade(input, noMargin).blockers.join(' '), /Margin size unavailable/);
 });
+
+test('no Canary cap at 500, 1000 or 10000 USDso; optional wallet limit blocks exactly', () => {
+  const deep = observation();
+  deep.account.maxQuantityRaw = '1000000000';
+  deep.depth = undefined;
+  for (const notional of ['500', '1000', '10000']) {
+    const quantity = (Number(notional) / 79806.1).toFixed(5);
+    const result = assessDirectTrade({ ...input, quantity }, deep);
+    assert.ok(!result.blockers.some(reason => /100 USDso|custom/i.test(reason)), result.blockers.join(' '));
+  }
+  const limited = assessDirectTrade({ ...input, quantity: '0.01253', customMaxNotional: '500' }, deep);
+  assert.match(limited.blockers.join(' '), /custom 500 USDso maximum/);
+  assert.equal(assessDirectTrade({ ...input, customMaxNotional: '0' }, deep).verdict, 'RED');
+});

@@ -75,6 +75,14 @@ test('changed price, quantity, side, account or mode invalidates immutable inten
     assert.ok(fields(check({}, { ...input, [field]: value })).includes(field), field);
 });
 
+test('changed custom trading limit invalidates order review', () => {
+  const limited = { ...input, customMaxNotional: '1000' };
+  const reviewedLimited = { ...reviewed, input: limited };
+  const verdict = comparePreflight(reviewedLimited, { ...limited, customMaxNotional: '500' }, fresh, now);
+  assert.equal(verdict.ok, false);
+  assert.ok(fields(verdict).includes('customMaxNotional'));
+});
+
 test('contract simulation failure blocks even when calldata intent is unchanged', () => {
   const result = check({ status: 'BLOCKED', transaction: null,
     guard: { blockers: ['Delegated contract simulation failed: reverted'] } });

@@ -29,7 +29,7 @@ export function explainGuard(plan, draft, spreadCautionBps = 25) {
       rule: `Soft caution above ${spreadCautionBps} bps; does not bypass protocol gates`, freshness: book.block || 'unknown' },
     { name: 'Price, size & notional', status: blockers.some(reason => /price|tick|lot|quantity|notional|PostOnly|mark/i.test(reason)) ? 'BLOCKED' : 'PASS',
       observed: `${draft.side} ${draft.quantity} @ ${draft.price} USDso`,
-      rule: 'Market tick/lot, minimum quantity, ≤100 USDso and ≤1% mark deviation', freshness: observation.block || 'unknown' },
+      rule: `Market tick/lot, minimum quantity, ${draft.customMaxNotional ? `custom ≤${draft.customMaxNotional} USDso, ` : 'no custom notional maximum, '}and ≤1% mark deviation`, freshness: observation.block || 'unknown' },
     { name: 'Margin', status: plan.marginPreview?.sufficient === true ? 'PASS' : 'BLOCKED',
       observed: `Available ${plan.account?.marginUnlocked ?? 'see account strip'} USDso · lock ${plan.marginPreview?.lockUsdso ?? 'unavailable'} USDso`,
       rule: 'Fresh SDK max size and sufficient MarginBank preview', freshness: plan.marginPreview?.asOfBlock || observation.block || 'unknown' },

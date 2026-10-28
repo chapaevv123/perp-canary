@@ -400,6 +400,10 @@ body{background:radial-gradient(ellipse at 50% -250px,#202a42 0,#0b101b 55%);col
 .wallet-permission-details .mode-explanation { margin:5px 0 10px;font-size:13px; }
 .wallet-permission-details .wallet-summary { margin:9px 0;padding:10px;font-size:13px; }
 .wallet-permission-details .wallet-summary span { font-size:13px;line-height:1.5; }
+.trading-limits { border-top:1px solid #34485c;padding:10px 2px 2px;display:grid;gap:8px;font-size:13px; }
+.trading-limits label { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.trading-limits input[type="text"] { width:min(220px,100%);padding:7px 9px; }
+.trading-limits p { margin:0;color:#b9c9d6;line-height:1.4; }
 .permission-facts { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:6px 0 12px; }
 .permission-facts div { min-width:0;padding:7px 0;border-top:1px solid #30465a; }
 .permission-facts dt { color:#9bb1c4;font-size:12px; }
@@ -407,6 +411,7 @@ body{background:radial-gradient(ellipse at 50% -250px,#202a42 0,#0b101b 55%);col
 .trade-panel .side-switch { margin:9px 0 14px; }
 .trade-panel .side-switch button { font-size:15px;padding:12px 8px; }
 .trade-panel .form-row,.trade-panel .field { font-size:14px; }
+.trade-panel .form-row #order-type { display:inline-block;padding:8px 11px;border:1px solid #45556a;border-radius:5px;color:#e7eef8;background:#1b2635;font-size:14px; }
 .trade-panel .field input { font-size:16px;min-height:46px; }
 .trade-panel .quick-actions button,.trade-panel .offsets button { font-size:14px;min-height:42px; }
 .trade-panel .control-note { color:#b8cbd9;font-size:13px;line-height:1.4; }

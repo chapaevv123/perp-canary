@@ -16,11 +16,16 @@ test('sizing uses bigint units, lot rounding and labels stop as a reference', ()
     baseDecimals: 8, quoteDecimals: 18, lotSizeRaw: '1000', minQuantityRaw: '13000',
     initialMarginBps: 500 });
   assert.equal(small.status, 'BELOW_MINIMUM');
-  const capped = calculatePositionSize({ capital: '10000', riskPercent: '1', entry: '80000', stop: '79000', side: 'BUY',
+  const large = calculatePositionSize({ capital: '10000', riskPercent: '1', entry: '80000', stop: '79000', side: 'BUY',
     baseDecimals: 8, quoteDecimals: 18, lotSizeRaw: '1000', minQuantityRaw: '13000',
     initialMarginBps: 500 });
-  assert.equal(capped.cappedByGuard, true);
-  assert.equal(capped.notionalUsdso, '100');
+  assert.equal(large.status, 'CALCULATED');
+  assert.equal(large.notionalUsdso, '8000');
+  const limited = calculatePositionSize({ capital: '10000', riskPercent: '1', entry: '80000', stop: '79000', side: 'BUY',
+    baseDecimals: 8, quoteDecimals: 18, lotSizeRaw: '1000', minQuantityRaw: '13000',
+    initialMarginBps: 500, customMaxNotional: '1000' });
+  assert.equal(limited.status, 'EXCEEDS_CUSTOM_LIMIT');
+  assert.equal(limited.quantity, large.quantity);
   assert.throws(() => calculatePositionSize({ capital: '100', riskPercent: '1', entry: '80000',
     stop: '81000', side: 'BUY', baseDecimals: 8, quoteDecimals: 18, lotSizeRaw: '1000',
     minQuantityRaw: '13000', initialMarginBps: 500 }), /Stop reference/);

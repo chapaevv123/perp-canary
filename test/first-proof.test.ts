@@ -29,8 +29,7 @@ test('fresh trusted BTC book offers three owner-selectable tick prices within ri
   assert.equal(result.chosenQuantity, '0.00013');
   assert.deepEqual(result.candidates.map(c => c.offsetBps), [10, 25, 50]);
   assert.ok(result.candidates.every(c => c.status === 'CANDIDATE' &&
-    BigInt(raw(c.price)) < BigInt(raw(result.bestBid)) &&
-    BigInt(raw(c.notional)) <= parseUnits('100', 18)));
+    BigInt(raw(c.price)) < BigInt(raw(result.bestBid)) && BigInt(raw(c.notional)) > 0n));
 });
 test('changed crossed book and expired quote block all suggestions', () => {
   const good = fixture();
@@ -40,12 +39,12 @@ test('changed crossed book and expired quote block all suggestions', () => {
   assert.ok(priceReport(crossed).candidates.every(c => c.status === 'BLOCKED'));
   assert.equal(priceReport(good, Date.parse(good.bookTops.observedAt!) + 31_000).status, 'BLOCKED');
 });
-test('mark deviation, margin, min grid and revoked permission fail closed', () => {
+test('mark deviation, min grid and revoked permission fail closed; margin awaits exact SDK preview', () => {
   const good = fixture();
   const farMark = { ...good, markPriceRaw: raw('81000') };
   assert.equal(priceReport(farMark).status, 'BLOCKED');
   assert.ok(priceReport(farMark).candidates.every(c => c.reasons.some(r => r.includes('1%'))));
-  assert.equal(priceReport({ ...good, marginBankUnlocked: '1' }).status, 'BLOCKED');
+  assert.equal(priceReport({ ...good, marginBankUnlocked: '1' }).status, 'READY');
   assert.equal(priceReport({ ...good, marketGrid: { ...good.marketGrid,
     minQuantityRaw: 'UNKNOWN' } }).status, 'BLOCKED');
   assert.equal(priceReport({ ...good, permissions: { ...good.permissions,
@@ -67,5 +66,5 @@ test('owner override is checked against current ask, mark, tick, quantity and no
   assert.ok(ownerBuyLimitReasons(current, '79000', '0.00013').some(r => r.includes('1%')));
   assert.ok(ownerBuyLimitReasons(current, '79920.01', '0.00013').some(r => r.includes('tick')));
   assert.ok(ownerBuyLimitReasons(current, '79920', '0.00012').some(r => r.includes('minimum')));
-  assert.ok(ownerBuyLimitReasons(current, '79920', '0.013').some(r => r.includes('100 USDso')));
+  assert.ok(!ownerBuyLimitReasons(current, '79920', '0.013').some(r => r.includes('100 USDso')));
 });

@@ -62,7 +62,7 @@
     <h3>Place Order · read-only plan</h3><form id="botPlanForm"><label>Side<select id="botSide"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></label><label>Limit price<input id="botPrice" inputmode="decimal" placeholder="e.g. 80440.4" required></label><label>Quantity<input id="botQuantity" inputmode="decimal" placeholder="e.g. 0.001" required></label><button id="botPlanButton" type="submit" disabled>Plan and simulate</button></form><div id="botPlanState" class="notice" role="status" aria-live="polite">BLOCKED · Connect and verify a bot first. Execution requires separate local CLI confirmation.</div>
   </section>
   <section class="panel" id="executionControl"><h2>Execution Control</h2><p class="sub">BTC-PERP on Hideki 50383 only. The browser creates read-only plans; a separate local terminal verifies and confirms one saved plan hash. This page never receives a password or sends a transaction.</p>
-    <p class="small">Per order cap: 100 USDso notional · 10,000,000 gas units · 0.1 STT gas budget · maximum 1% mark movement at execution · plan lifetime about two minutes.</p>
+    <p class="small">No Canary order-notional cap; protocol and margin limits still apply · 10,000,000 gas units · 0.1 STT gas budget · maximum 1% mark movement at execution · plan lifetime about two minutes.</p>
     <h3>Active Position · LIVE READ-ONLY</h3><div id="activePosition" class="notice">Loading on-chain position…</div>
     <h3>Open Orders · LIVE READ-ONLY</h3><div id="openOrders" class="notice">Loading on-chain orders…</div>
     <button id="refreshOrders" class="secondary" type="button">Refresh position and orders</button>
