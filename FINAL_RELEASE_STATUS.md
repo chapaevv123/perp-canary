@@ -1,26 +1,36 @@
-# Perp Canary — M10 final release status (2026-10-28)
+# Perp Canary — M11 final release status (2026-10-28)
 
-**Verdict: BLOCKED for wallet-connected competition release and DoraHacks submission.** The read-only public demo is live. A reported MetaMask phishing warning remains unexplained and the actual Render deploy SHA is not exposed publicly. No wallet connection or signing was attempted during this closure.
+**Verdict: NOT READY.** Local product acceptance passed, but the public Render service still served older trading assets during the resumed audit. The Render deploy SHA is not exposed publicly, and live owner MetaMask checks remain unverified.
 
-## Verified release evidence
+## Version and deployment
 
-- Live URL: https://perp-canary.onrender.com/ — HTTPS `200`, `/api/v1/health` `200`, public unsigned-prepare mode, Content Security Policy restricted to self, HSTS enabled.
-- GitHub `main` at the production smoke: `1718b717b0461d6ebea1bf211b9631146c64c439`, confirmed with `git ls-remote` on 2026-10-28. Six production JavaScript assets matched this checkout byte-for-byte; CSS matched by content after CRLF/LF normalization. This supports code parity but does **not** independently identify Render's exact deploy commit. The final documentation-only closure commit is available at https://github.com/chapaevv123/perp-canary/commits/main.
-- Live API: 21 verified PERP markets. BTC-PERP and ETH-PERP snapshot requests returned chain `50383`, positive marks and `TRUSTED` pinned books from `SDK_ONCHAIN_PINNED_AND_DIRECT_HTTPS` at blocks `35476576` and `35476594` during the smoke.
-- Browser: desktop 1440×900 and mobile 390×844 returned `200`, live BTC mark and trusted book, no page errors, no document-level horizontal overflow. Market Radar, Journal, Alerts and Position Sizing panels opened; Canary Guard was present. The stateless sizing calculation returned an `ESTIMATED` quantity of `0.00123 BTC` for a hypothetical input and explicitly warned that the stop is not installed. A read-only public Journal request returned three indexed BTC rows. No wallet confirmation was invoked.
-- Focused tests: see final recorded test result below. No full development audit was repeated.
+- GitHub `main` at the resumed audit: `2c46bfc99819d5b2b4da92f044f2dd6145ee2820`, verified by `git ls-remote`. M11 implementation and final control audit are committed in `3f15e04` after that observation; the current report revision is on [GitHub main](https://github.com/chapaevv123/perp-canary/commits/main).
+- Render `https://perp-canary.onrender.com/` returned HTTP 200. Its `/`, `trading.js`, `terminal.js`, `preflight-compare.js`, `guard-v2.js`, and `terminal.css` differed from local M11 files; the public trading script and page lacked M11 markers. **Production deployment of M11 is not verified and the observed assets are stale.** HTTP 200 and live market data are not deploy proof.
+- `render.yaml` declares the existing free Docker web service, `/api/v1/health`, and public unsigned API mode. It does not declare a paid plan or contain a secret value. Dashboard environment values and deployed SHA require owner inspection.
 
-## Security and warning
+## Product acceptance
 
-- Source audit found no third-party script in the public page, no untrusted redirect and no seed/private-key or message-signature request. Wallet connection uses `eth_requestAccounts` on a user click. `wallet_switchEthereumChain` / `wallet_addEthereumChain` are explicit network actions. `eth_sendTransaction` is reachable only after reviewed voucher, order or account-action flows; no autonomous browser send was found. The public server uses exact HTTPS Host/Origin checks, an allowlist of routes, self-only script CSP, and returns unsigned plans.
-- `render.yaml` declares only public configuration (`NODE_ENV`, port, bind host and public mode); no secret value or signing key is configured there. The public health response exposes no secret. Render dashboard environment variables could not be inspected from the public site and require owner confirmation.
-- [MetaMask's official Why Blocked utility](https://metamask.github.io/eth-phishing-detect/) returned **“This domain is not blocked”** for `perp-canary.onrender.com` on 2026-10-28. This does not explain or invalidate the owner's reported phishing warning, which may come from a different security signal. No bypass or false-positive claim is made. [Official reporting guidance](https://support.metamask.io/ru/stay-safe/safety-in-web3/deceptive-site-ahead-when-trying-to-connect-to-a-site/) and a [copy-ready review draft](docs/submission/metamask-review-request.md) are prepared.
+| Measure | Result |
+| --- | --- |
+| Initial controls audited | 102 |
+| Local controls passed | 101 |
+| Existing control families repaired or made truthful | 8 |
+| Confirmed local control failures remaining | 0 |
+| Controls blocked from a PASS claim | 1 external official documentation destination; live wallet actions remain separately unverified |
+| Unit/integration | 186 passed, 0 failed |
+| Local Chromium | 23 passed, 0 failed; 3 gated live tests skipped |
+| Quality gates | ESLint, TypeScript typecheck, build, `git diff --check` passed |
 
-## Known limitations and exact owner actions
+The 100 USDso application cap is removed. No custom maximum applies by default. A positive optional maximum is scoped to the connected EOA and account mode, persists in browser storage, and is enforced in preview and server preflight. Deterministic checks accepted 500, 1,000 and 10,000 USDso without a Canary-only cap; protocol maximum, margin, grid, gas and permission gates still apply. No order was submitted in this audit.
 
-- Render Free can cold start after inactivity. Quotes depend on the Hideki RPC, SDK and indexer; partial source failure is surfaced. Alerts work only while the browser tab is open. Verified 24h change/volume, complete fees/realized PnL, guaranteed reduce-only close, live cancellation and direct EOA trade are not claimed.
-- Owner: capture the exact MetaMask warning screenshot, URL, browser/extension version and time; send the prepared review request to MetaMask. Until resolved, do not connect or sign on the flagged URL.
-- Owner: check the Render dashboard's deployed commit against GitHub `main` and inspect environment variables for unexpected secrets or wallet credentials. Do not add paid hosting.
-- Owner: confirm DoraHacks email whitelist, exact deadline and form requirements in the authenticated portal; review the [copy-ready submission checklist](docs/m9-owner-submission-checklist.md), then submit manually. No DoraHacks submission was made here.
+The misleading order-type dropdown is replaced by a static **PostOnly (supported)** label. Only verified BUY/SELL PostOnly preparation is exposed. The local owner-only legacy diagnostics page's inline script and CSS were blocked by the shared CSP; they now load as first-party files and the navigation/browser audit passes without CSP errors. Public mode still denies the legacy routes.
 
-**Focused tests result:** 19/19 passed (`m7-public-server`, `m7-product`, `wallet-browser`, `m8-intelligence`, `m7-browser-logic`); `git diff --check` passed. These tests cover public route/origin controls, wallet send gating, Guard, Radar, Alerts, Journal and position sizing logic.
+The owner reports MetaMask now connects without a phishing warning. The old warning is **not** treated as an active blocker. This audit used a read-only EIP-1193 mock and did not reproduce the owner's actual extension, request a signature, or initiate a blockchain transaction. Live connect, account/chain identity, permissions, account switch, and disconnect remain owner-verifiable. Live order placement, cancellation and protective stops are not certified.
+
+## Required owner actions
+
+1. Open Render Dashboard → `perp-canary` → Events/Deploys. Check the latest deploy status and full commit SHA against GitHub `main`. If the deploy is older, use **Manual Deploy → Deploy latest commit** on the existing free service and wait for **Live**. Confirm the public page exposes Trading Limits and static PostOnly and that its six audited assets match the deployed commit. No paid setting change is needed.
+2. At the exact HTTPS origin above, use the owner's MetaMask to verify the selected EOA, Hideki chain ID **50383**, margin owner and permissions, then switch account and disconnect. Do not sign or send a transaction for this check. Record the exact text if any warning returns.
+3. After production parity and wallet checks, review the competition checklist and submit the DoraHacks application manually. This audit did not submit it.
+
+Detailed control evidence: [M11 full product acceptance](docs/M11_FULL_PRODUCT_ACCEPTANCE.md).
