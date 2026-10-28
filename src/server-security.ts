@@ -1,10 +1,13 @@
 export function localRequestRejection(input: { host?: string; origin?: string; fetchSite?: string;
-  method?: string }, port: number): string | null {
+  fetchMode?: string; fetchDest?: string; method?: string; path?: string }, port: number): string | null {
   const localHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
   if (!localHosts.includes(input.host ?? '')) return 'Localhost Host header required';
-  if (input.fetchSite === 'cross-site') return 'Cross-site requests are blocked';
-  if (input.method === 'POST' &&
-    ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(input.origin ?? ''))
+  const localNavigation = input.method === 'GET' &&
+    (input.path === '/' || input.path === '/index.html') && input.origin === undefined &&
+    input.fetchMode === 'navigate' && input.fetchDest === 'document';
+  if (input.fetchSite === 'cross-site' && !localNavigation) return 'Cross-site requests are blocked';
+  if ((input.origin !== undefined && input.origin !== `http://${input.host}`) ||
+    (input.method === 'POST' && input.origin === undefined))
     return 'Same-origin browser request required';
   return null;
 }

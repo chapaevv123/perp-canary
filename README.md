@@ -23,6 +23,8 @@ npm.cmd run serve
 
 Open `http://127.0.0.1:8787`. The local server never receives private keys and never signs a user transaction. For a public demo, trusted HTTPS hosting and separate owner approval are still required.
 
+If the server was already running when source files changed, stop it with `Ctrl+C` and run `npm.cmd run serve` again. Both `http://127.0.0.1:8787/` and `http://localhost:8787/` accept normal top-level browser navigation. Cross-origin API requests remain blocked.
+
 ## Trading walkthrough
 
 1. Connect MetaMask or another EIP-1193 wallet and check the full address and **Somnia Hideki 50383** in Wallet details.

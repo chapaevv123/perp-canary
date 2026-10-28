@@ -98,7 +98,8 @@ createServer(async (request, response) => {
       origin: request.headers.origin, fetchSite: request.headers['sec-fetch-site'],
       method: request.method, path }, publicSite) :
       localRequestRejection({ host: request.headers.host, origin: request.headers.origin,
-        fetchSite: request.headers['sec-fetch-site'], method: request.method }, port);
+        fetchSite: request.headers['sec-fetch-site'], fetchMode: request.headers['sec-fetch-mode'],
+        fetchDest: request.headers['sec-fetch-dest'], method: request.method, path }, port);
     if (rejection) { json(response, 403, { error: rejection }); return; }
     if (publicSite) {
       const forwarded = request.headers['x-forwarded-for'];
