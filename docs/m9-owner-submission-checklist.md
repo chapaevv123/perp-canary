@@ -1,8 +1,22 @@
-# M9 owner submission checklist
+# M10 final submission checklist
 
-1. Connect an existing Render account to GitHub, select this repository and deploy `render.yaml` as a **Free** Blueprint. Do not select a paid plan or add a payment method. Send the resulting `https://…onrender.com` URL so public acceptance and final submission links can be verified. Render Free sleeps on idle and is a $0 judge/demo option with reliability limits.
-2. On the durable URL, manually connect the intended wallet and check the delegated Wallet 1 grant, fresh Canary Guard review and wallet modal without signing or sending an order. Automated public smoke cannot prove a real wallet interaction.
-3. In the existing dreamDEX/Somnia Discord ticket with @emrey.somi, check whitelist approval. The previous event invitation has expired; the DoraHacks Submit Build button is currently disabled according to the owner. No second whitelist request was sent.
-4. Confirm the owner-visible DoraHacks deadline **2026-11-02 01:59 UTC+2**, eligible track, exact form fields and whitelist state in the authenticated platform. The public page could not be read automatically (405).
-5. Review [submission text](submission/dorahacks-submission.md), [demo script](submission/demo-script.md), [judge walkthrough](submission/judge-walkthrough.md), [roadmap](submission/product-roadmap.md), screenshots and the verified GitHub/production URLs. Record a 2-minute demo video if the form requires it.
-6. Submit the competition entry only after a **separate explicit owner authorization**. No entry has been submitted.
+## Copy-ready links
+
+- Live read-only demo: https://perp-canary.onrender.com/
+- GitHub: https://github.com/chapaevv123/perp-canary
+- DoraHacks Build page: https://dorahacks.io/hackathon/dreamdex-perps-bounty/detail
+- Verified order evidence: https://github.com/chapaevv123/perp-canary/blob/main/docs/evidence/verified-delegated-btc-order.json
+- Submission text: https://github.com/chapaevv123/perp-canary/blob/main/docs/submission/dorahacks-submission.md
+- Demo script: https://github.com/chapaevv123/perp-canary/blob/main/docs/submission/demo-script.md
+- Judge walkthrough: https://github.com/chapaevv123/perp-canary/blob/main/docs/submission/judge-walkthrough.md
+- Roadmap, clearly marked as planned: https://github.com/chapaevv123/perp-canary/blob/main/docs/submission/product-roadmap.md
+
+## Owner actions before submission
+
+1. Capture the exact MetaMask warning, URL, extension version and screenshot. Do not bypass a live warning, connect, or sign on the flagged URL. Use the prepared [official review request](submission/metamask-review-request.md); submit it through MetaMask's site-warning channel. Wait for review or independently verify resolution in a normal MetaMask session.
+2. In Render, confirm the deployed commit SHA matches GitHub `main` after this documentation update. The public app serves source-matching JavaScript and CSS, but the public health endpoint does not expose the Render deploy SHA. Render Free can cold start after idle; allow time for a judge's first load.
+3. Confirm the DoraHacks email whitelist in the existing dreamDEX/Somnia support ticket. The owner previously reported a disabled Submit Build button. Check the authenticated form's exact deadline, timezone, track and required fields; the public page did not establish these reliably.
+4. Record a two-minute demo video and product post only if the authenticated form requires them. Their public URLs are pending; do not paste placeholders into the form.
+5. Review the claims and links above, then submit the DoraHacks Build manually. No submission has been made by this release task.
+
+The working product is the 21-market Radar, live BTC/ETH data and trusted book, deterministic Guard, guarded PostOnly planning, in-tab Alerts, SDK Journal, sizing estimate and verified historical delegated BTC fill. The AI Copilot, background notifications, full PnL and multi-DEX analytics are roadmap only.

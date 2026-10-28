@@ -9,7 +9,7 @@ Verified Hideki market discovery, real trusted quotes and indexed candles, walle
 - Add verified rolling 24h price and volume from complete indexer windows, then unlock volatility and activity filters with provenance.
 - Reconcile per-order fills, execution prices and protocol fees with receipts/indexer pages; only then calculate realized PnL and win/loss for fully reconstructed lifecycles.
 - Introduce authenticated tenant storage and opt-in background alerts with quotas, notification channels and account ownership proof.
-- Complete public-domain security and performance smoke after approved deployment; improve market-scan cache and request budget using production telemetry.
+- Improve market-scan cache and request budget using production telemetry.
 
 ## Long-term vision
 

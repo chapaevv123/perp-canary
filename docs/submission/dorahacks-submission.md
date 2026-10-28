@@ -16,20 +16,20 @@ On-chain perp traders need to discover usable markets, understand quote quality 
 
 ## Evidence and limits
 
-Read-only live validation covered RPC, WebSocket, indexer, pool, 21-market Radar and Wallet 1 journal. M8 sent no transaction or signature. One earlier delegated BTC placement and fill are independently verified in the repository's evidence bundle. We do not claim a live cancellation, guaranteed reduce-only close, complete fee/PnL analytics, persistent closed-browser alerts or a deployed public app.
+Read-only live validation covered RPC, WebSocket, indexer, pool, 21-market Radar and Wallet 1 journal. A bounded production smoke on 2026-10-28 confirmed HTTPS, 21 markets, live BTC/ETH quotes with trusted books, and desktop/mobile layout. No production transaction or signature was made. One earlier delegated BTC placement and fill are independently verified in the repository's evidence bundle. We do not claim a live cancellation, guaranteed reduce-only close, complete fee/PnL analytics or persistent closed-browser alerts. A reported MetaMask phishing warning is unresolved; wallet connection on the flagged URL is held pending official review. Render Free can cold start after inactivity.
 
 ## Technical architecture
 
 Node.js 22 service and browser UI use `@somnia-chain/markets-sdk@0.32.1`, Hideki chain identity 50383, direct same-block RPC book checks and official indexer reads. The server returns public data and unsigned plans; only an injected EIP-1193 wallet can submit after the user reviews a fresh Canary Guard plan. Exact HTTPS Host/Origin allowlists protect public mode. Local browser storage keeps alert rules; no user alert database or signing key exists on the server.
 
-## Links to fill after approval
+## Submission links
 
-- GitHub: https://github.com/chapaevv123/perp-canary — public `main` verified at `061bd186043742bda60ab7aa5a8b8f1154f8355c` on 2026-10-28.
-- Temporary public preview: https://bodies-radio-irrigation-assume.trycloudflare.com — verified read-only, changes or disappears when the local Quick Tunnel stops; **do not use as a durable submission URL**.
-- Durable demo: `[VERIFIED PRODUCTION HTTPS URL PENDING]`
+- GitHub: https://github.com/chapaevv123/perp-canary
+- Read-only public demo: https://perp-canary.onrender.com/
 - Product post: `[PUBLIC POST URL PENDING]`
 - Demo video: `[VIDEO URL PENDING]`
-- Evidence: `docs/evidence/verified-delegated-btc-order.json` in repository after approved push.
+- Evidence: https://github.com/chapaevv123/perp-canary/blob/main/docs/evidence/verified-delegated-btc-order.json
+- Product roadmap (planned, not shipped): https://github.com/chapaevv123/perp-canary/blob/main/docs/submission/product-roadmap.md
 
 ## Submission gate
 

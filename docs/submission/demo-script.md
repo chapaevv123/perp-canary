@@ -12,4 +12,4 @@
 
 **1:35–1:55 — Learn.** Open live SDK Journal, show status distinctions, source labels and the linked verified Replay. Show order `14978756187852164141712` with 0.00013 BTC incremental attribution only.
 
-**1:55–2:00 — Close.** Point to evidence and tests. State current limits: no 24h metrics, no complete realized PnL, no public deployment yet.
+**1:55–2:00 — Close.** Point to evidence and tests. State current limits: no 24h metrics or complete realized PnL; Render Free may cold start. Use the public demo read-only until the reported MetaMask warning is resolved.
