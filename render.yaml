@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: perp-canary
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CANARY_PORT
+        value: '8080'
+      - key: CANARY_HOST
+        value: 0.0.0.0
+      - key: CANARY_PUBLIC_ENABLED
+        value: '1'

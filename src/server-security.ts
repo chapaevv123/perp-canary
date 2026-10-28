@@ -33,7 +33,9 @@ export function publicRouteAllowed(path: string, method?: string): boolean {
 }
 export function publicOrigin(): URL | null {
   if (process.env.CANARY_PUBLIC_ENABLED !== '1') return null;
-  const raw = process.env.CANARY_PUBLIC_ORIGIN;
+  // Render supplies its assigned HTTPS URL at runtime; public mode still requires an exact origin.
+  const raw = process.env.CANARY_PUBLIC_ORIGIN ??
+    (process.env.RENDER === 'true' ? process.env.RENDER_EXTERNAL_URL : undefined);
   if (!raw) throw Error('CANARY_PUBLIC_ORIGIN is required in public mode');
   const url = new URL(raw);
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' ||

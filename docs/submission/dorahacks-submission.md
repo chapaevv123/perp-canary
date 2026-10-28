@@ -24,8 +24,9 @@ Node.js 22 service and browser UI use `@somnia-chain/markets-sdk@0.32.1`, Hideki
 
 ## Links to fill after approval
 
-- GitHub: `https://github.com/chapaevv123/perp-canary` — remote exists, M8 changes are not pushed.
-- Demo: `[APPROVED HTTPS URL PENDING]`
+- GitHub: https://github.com/chapaevv123/perp-canary — public `main` verified at `061bd186043742bda60ab7aa5a8b8f1154f8355c` on 2026-10-28.
+- Temporary public preview: https://bodies-radio-irrigation-assume.trycloudflare.com — verified read-only, changes or disappears when the local Quick Tunnel stops; **do not use as a durable submission URL**.
+- Durable demo: `[VERIFIED PRODUCTION HTTPS URL PENDING]`
 - Product post: `[PUBLIC POST URL PENDING]`
 - Demo video: `[VIDEO URL PENDING]`
 - Evidence: `docs/evidence/verified-delegated-btc-order.json` in repository after approved push.

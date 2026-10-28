@@ -1,6 +1,6 @@
 # Perp Canary
 
-**Product status (M8, 2026-10-28):** Perp Canary is an execution-intelligence and risk-management workspace for on-chain perpetual traders, beginning with dreamDEX on Somnia. The existing guarded terminal now includes a 21-market Radar, browser-local open-tab Alerts, paginated SDK Trade Journal and improved estimated position sizing. [Trader guide](docs/product-feature-guide.md) · [M8 acceptance](docs/m8-product-acceptance.md) · [security review](docs/m8-security-review.md). The repository has not been pushed or publicly deployed for this milestone.
+**Product status (M9, 2026-10-28):** Perp Canary is an execution-intelligence and risk-management workspace for on-chain perpetual traders, beginning with dreamDEX on Somnia. The guarded terminal includes a 21-market Radar, browser-local open-tab Alerts, paginated SDK Trade Journal and estimated position sizing. The code is published on GitHub; a temporary public HTTPS preview passed read-only Chromium checks. A durable production host is still pending. [Trader guide](docs/product-feature-guide.md) · [M9 acceptance](docs/m9-production-acceptance.md) · [security review](docs/m8-security-review.md).
 
 **A guarded dreamDEX perpetual trading terminal on Somnia Hideki testnet (chain 50383).** Perp Canary connects an injected EIP-1193 wallet, discovers verified USDso perp markets, shows fresh pinned order books, and prepares wallet-confirmed PostOnly orders. Canary Trade Guard checks the market, exact account, size, price, margin, pool permission, gas, nonce, expiry, calldata and contract simulation immediately before a wallet prompt.
 
@@ -25,7 +25,7 @@ npm.cmd ci
 npm.cmd run serve
 ```
 
-Open `http://127.0.0.1:8787`. The local server never receives private keys and never signs a user transaction. For a public demo, trusted HTTPS hosting and separate owner approval are still required.
+Open `http://127.0.0.1:8787`. The local server never receives private keys and never signs a user transaction. A durable public demo requires a verified HTTPS host and production acceptance checks.
 
 If the server was already running when source files changed, stop it with `Ctrl+C` and run `npm.cmd run serve` again. Both `http://127.0.0.1:8787/` and `http://localhost:8787/` accept normal top-level browser navigation. Cross-origin API requests remain blocked.
 
@@ -45,7 +45,7 @@ Direct Wallet funding is separate: Wallet details shows native STT, transferable
 - **Live reads:** dynamic SDK/factory market discovery (21 tradeable market rows at the 2026-10-27 probe), market status, mark and five-level order book checked against direct RPC at a pinned block; user account balances, permission flags, margin, positions, open orders and optional indexed finished-order history.
 - **Unsigned readiness:** guarded PostOnly BUY/SELL and owner-scoped delegated placement, separate reviewed direct funding actions and order cancellation. Actual wallet signing requires an explicit click and wallet confirmation for each write.
 - **Canary Intelligence:** transparent Trade Guard, in-tab Market Radar, deterministic Smart Position Sizing, in-tab alerts and a local public-hash trade journal. The stop used for sizing is a reference only. There is no model-backed AI Copilot or background alert service.
-- **Verified lifecycle:** one delegated MetaMask placement and its full fill are confirmed on-chain. The position existed before this order; only its 0.00013 BTC increase matches the fill. A live cancellation, direct EOA trade and position close have not been verified. Guaranteed delegated reduce-only close, market/IOC, complete PnL and public hosting are not enabled. The local server must not be advertised as a public trading deployment.
+- **Verified lifecycle:** one delegated MetaMask placement and its full fill are confirmed on-chain. The position existed before this order; only its 0.00013 BTC increase matches the fill. A live cancellation, direct EOA trade and position close have not been verified. Guaranteed delegated reduce-only close, market/IOC and complete PnL are not enabled. The temporary public preview is not a durable trading deployment.
 
 The [capability matrix](docs/M5_TRADING_CAPABILITY_MATRIX.md) and [M5.3 evidence](docs/m53-delegated-readiness.md) separate actual on-chain reads from simulated transactions. The historical bot proof is documented in [verified on-chain evidence](docs/verified-onchain-evidence.md): transaction `0x45cca8d50aead7a4734849759cd1f5699112fea0feb938f6bdd0e8ae2cc0f121` at block 34465778 emitted `OrderPlaced` and `OrderRested`. The original bounded scan left its later cause unknown; a later 2026-10-27 live terminal scan reported `OrderExpired`.
 
@@ -83,6 +83,6 @@ Set `CANARY_UI_LIVE_RADAR=1` for the separate read-only 21-market Chromium Radar
 - [Security model](docs/security-model.md)
 - [Historical bot proof](docs/verified-onchain-evidence.md)
 
-No push, deployment or submission is performed by this repository workflow.
+The M8 product was pushed to the existing GitHub repository on 2026-10-28. No paid resource, durable production deployment or competition submission has been made.
 
-For owner-approved publication preparation, see the [deployment plan](docs/m8-deployment-plan.md), [submission draft](docs/submission/dorahacks-submission.md) and [two-minute demo](docs/submission/demo-script.md). `Dockerfile`, `fly.example.toml` and `.env.example` are templates only.
+For hosting and submission status, see the [M9 launch report](docs/m9-public-launch-report.md), [owner checklist](docs/m9-owner-submission-checklist.md), [submission draft](docs/submission/dorahacks-submission.md) and [two-minute demo](docs/submission/demo-script.md). `render.yaml` is a $0 web-service blueprint; `Dockerfile`, `fly.example.toml` and `.env.example` are deployment templates.

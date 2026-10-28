@@ -4,7 +4,25 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readExecutionReplay, buildExecutionReplay } from '../src/execution-replay.ts';
 import { scenarioPnl } from '../src/position-intelligence.ts';
-import { publicRequestRejection, publicRouteAllowed, RequestLimiter, securityHeaders } from '../src/server-security.ts';
+import { publicOrigin, publicRequestRejection, publicRouteAllowed, RequestLimiter, securityHeaders } from '../src/server-security.ts';
+
+test('Render public origin uses only the provider-assigned exact HTTPS URL', () => {
+  const saved = Object.fromEntries(['CANARY_PUBLIC_ENABLED', 'CANARY_PUBLIC_ORIGIN', 'RENDER',
+    'RENDER_EXTERNAL_URL'].map(key => [key, process.env[key]]));
+  try {
+    process.env.CANARY_PUBLIC_ENABLED = '1';
+    delete process.env.CANARY_PUBLIC_ORIGIN;
+    process.env.RENDER = 'true';
+    process.env.RENDER_EXTERNAL_URL = 'https://perp-canary.onrender.com';
+    assert.equal(publicOrigin()?.origin, 'https://perp-canary.onrender.com');
+    process.env.RENDER_EXTERNAL_URL = 'http://perp-canary.onrender.com';
+    assert.throws(publicOrigin, /exact HTTPS origin/);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test('verified order replay identifies exact fill and does not invent preflight', async () => {
   const replay = await readExecutionReplay('14978756187852164141712');
