@@ -4,7 +4,7 @@
 
 ## Version and production
 
-- GitHub `main` before M12 release: `30f89529711dbe3df23e821054344fe5cf6ea42e`, verified with `git ls-remote`. The exact M12 release SHA must be read from GitHub `main` after push; the final handoff reports it.
+- M12 implementation commit on GitHub: `e08b740d76c906295d3806eec15d03f2a6090599`, verified with `git ls-remote` after push. The [GitHub main commit page](https://github.com/chapaevv123/perp-canary/commits/main) shows the current branch tip, including this status update; the final handoff reports its full SHA.
 - Public Render `/api/v1/health` returned HTTP 200 on 2026-10-28, but does not expose a commit SHA. Public `/trading.js` contained old `READY FOR REVIEW` and lacked M12 `PREFLIGHT REQUIRED` and close guidance. **M12 is not confirmed deployed.**
 - GitHub deployments API returned zero records. `render.yaml` declares the existing free Docker service but does not prove Render Dashboard auto-deploy configuration or explain why the prior Blueprint stayed on M9 `1718b71`. No repository-side deployment setting was changed without evidence.
 
