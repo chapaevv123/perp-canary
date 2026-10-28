@@ -33,6 +33,6 @@
 
 1. In **Render Dashboard → perp-canary → Events/Deploys**, compare the latest **Live** deploy's full source commit SHA with GitHub `main`. If old, use **Manual Deploy → Deploy latest commit** on the existing free service and wait for **Live**. Do not create or pay for a new service. Reload `https://perp-canary.onrender.com/` and check the ticket says `PREFLIGHT REQUIRED / INPUTS COMPLETE` before review.
 2. With the owner MetaMask, check address, chain ID **50383**, selected market, margin owner and permissions. Select BTC-PERP SELL, quantity `0.0005`, a fresh non-crossing PostOnly price, and click **Review wallet order**. Record `phase`, `code`, exact message, timestamp and Render log if it fails. This diagnostic requires **no signature**; stop before wallet confirmation.
-3. Check the actual BTC position and open orders under the same owner account. If closing is desired, use the official dreamDEX Perps **Positions** controls and their reduce-only safeguard; Perp Canary SELL is directional.
+3. Check the actual BTC position and open orders under the same owner account. If reducing or closing is desired, inspect the official dreamDEX Perps **Positions** controls and verify reduce-only behavior before signing there; Perp Canary SELL is directional.
 
 Full evidence and issue-by-issue limitations: [M12 trading reliability report](docs/M12_TRADING_RELIABILITY_REPORT.md).

@@ -29,10 +29,10 @@ import { explainGuard } from './guard-v2.js';
   panel.querySelector('.trade-facts').after(feeNote);
   $('sell').title = 'SELL PostOnly can open or add to a short; this is not reduce-only.';
   const closeGuidance = document.createElement('p'); closeGuidance.className = 'small control-note';
-  closeGuidance.append('SELL / SHORT is a directional order, not a guaranteed close. For a verified reduce-only close, open the ',
+  closeGuidance.append('SELL / SHORT is a directional order, not a guaranteed close. To inspect documented reduce-only position controls, open the ',
     Object.assign(document.createElement('a'), { href: 'https://app.testnet.dreamdex.io/',
       target: '_blank', rel: 'noopener noreferrer', textContent: 'official dreamDEX Perps interface' }),
-    ' and use the current position in its Positions table.');
+    ' and inspect the current position in its Positions table. Confirm reduce-only behavior before signing there.');
   panel.querySelector('.side-switch').after(closeGuidance);
   const marketRules = document.createElement('p'); marketRules.id = 'market-rules';
   marketRules.className = 'small control-note'; marketRules.setAttribute('role', 'status');
