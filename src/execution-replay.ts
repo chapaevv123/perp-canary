@@ -47,7 +47,8 @@ export function buildExecutionReplay(e: ReplayEvidence) {
       block: e.current.block, hash: null },
   ];
   return { chainId: e.chainId, orderId: e.orderId, source: 'HISTORICAL_VERIFIED_BUNDLE',
-    observedAt: e.observedAt, operator: e.placement.from, owner: e.placement.callOwner,
+    observedAt: e.observedAt, indexedEndedAt: e.indexed.endedAt, verifiedFillPrice: filled.fillPrice,
+    operator: e.placement.from, owner: e.placement.callOwner,
     placementHash: e.placement.hash, fillHash: e.fillReceipt.hash, steps,
     limitation: 'This replay is a fixed historical evidence bundle. The current position and market may differ.' };
 }

@@ -1,0 +1,26 @@
+# Copy to fly.toml only after choosing an approved app name and public origin.
+app = "replace-with-approved-app-name"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  CANARY_PORT = "8080"
+  CANARY_HOST = "0.0.0.0"
+  CANARY_PUBLIC_ENABLED = "1"
+  CANARY_PUBLIC_ORIGIN = "https://replace-with-approved-app-name.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/api/v1/health"

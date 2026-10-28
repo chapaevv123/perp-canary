@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { orderBookEventsAbi } from '@somnia-chain/markets-sdk';
-import { createPublicClient, decodeEventLog, encodeEventTopics, formatUnits, http, parseAbi, toHex, type Hex } from 'viem';
+import { createPublicClient, formatUnits, http, parseAbi, type Hex } from 'viem';
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains';
 import { validateCanaryProof, type CanaryProofBundle } from './canary-proof.ts';
 import { BTC_POOL, OWNER_TRADING_WALLET, decodeKnownLogs } from './trade-forensics.ts';
@@ -12,16 +11,8 @@ export const FIRST_PROOF_FILE = 'canary-proofs/canary-proof-1793098877887-423065
 export const FIRST_ORDER_ID = '14978756187852164026332';
 export const FIRST_PROOF_HASH = '4230656d134ca6644edfbbcd5ec97468e8381e672c78bdb5ddd5730518d20e92';
 const FIRST_BLOCK = 34465778n;
-const historyNames = ['OrderCancelled', 'OrderExpired', 'OrderReduced', 'OrderCancelledSelfMatch',
-  'MakerOrderCancelledExceedsPosition', 'OrderCancelledPreFill'] as const;
-const eventTopic = (name: typeof historyNames[number] | 'OrderFilled') =>
-  encodeEventTopics({ abi: orderBookEventsAbi, eventName: name })[0]!;
-const indexedTopics = historyNames.map(eventTopic);
-const fillTopic = eventTopic('OrderFilled');
 const client = createPublicClient({ chain: hidekiTestnet, transport: http(RPC, { timeout: 15_000, retryCount: 0 }) });
 const depthAbi = parseAbi(['function getBookLevels(bool isBid,uint64 numLevels) view returns ((uint256 price,uint256 quantity)[])']);
-let scannedThrough = FIRST_BLOCK;
-const scannedEvents: LifecycleEvent[] = [];
 let ownerDiscoveryInFlight: ReturnType<typeof discoverBtcOrders> | null = null;
 function discoverOwnerOnce() {
   if (!ownerDiscoveryInFlight) ownerDiscoveryInFlight = discoverBtcOrders().finally(() => {
@@ -135,54 +126,22 @@ export async function readFirstOrderHistory() {
     String(e.args.orderId) === FIRST_ORDER_ID);
   const chainId = await client.getChainId();
   if (chainId !== 50383) throw Error(`Wrong chain ID ${chainId}`);
-  const [discovery, head] = await Promise.all([discoverOwnerOnce(), client.getBlockNumber()]);
+  const discovery = await discoverOwnerOnce();
   const events: LifecycleEvent[] = firstEvents.map(e => ({ name: e.eventName, block: proof.block,
     txHash: proof.txHash!, logIndex: e.logIndex,
     quantityRaw: e.eventName === 'OrderPlaced' ?
       String((e.args.placedOrder as { fullQuantity?: unknown }).fullQuantity) : null,
     source: 'VERIFIED_PROOF' }));
-  const orderTopic = toHex(BigInt(FIRST_ORDER_ID), { size: 32 });
-  const getIndexedLogs = async (from: bigint, to: bigint, topics: Array<Hex[] | Hex | null>) =>
-    client.request({ method: 'eth_getLogs', params: [{ address: BTC_POOL as Hex,
-      fromBlock: toHex(from), toBlock: toHex(to), topics }] });
-  // eth_getLogs providers commonly limit ranges. Query indexed topics and keep every range complete.
-  const scanChunk = async (from: bigint) => {
-    const to = from + 999n > head ? head : from + 999n;
-    const [ordinary, taker, maker] = await Promise.all([
-      getIndexedLogs(from, to, [indexedTopics, orderTopic]),
-      getIndexedLogs(from, to, [fillTopic, orderTopic]),
-      getIndexedLogs(from, to, [fillTopic, null, orderTopic]),
-    ]);
-    const chunkEvents: LifecycleEvent[] = [];
-    for (const log of [...ordinary, ...taker, ...maker]) {
-      if (!log.blockNumber || !log.transactionHash || !log.logIndex) throw Error('Incomplete indexed order log');
-      const decoded = decodeEventLog({ abi: orderBookEventsAbi, topics: log.topics, data: log.data });
-      const args = decoded.args as Record<string, unknown>;
-      chunkEvents.push({ name: decoded.eventName, block: BigInt(log.blockNumber).toString(),
-        txHash: log.transactionHash, logIndex: Number(BigInt(log.logIndex)),
-        quantityRaw: decoded.eventName === 'OrderFilled' ? String(args.quantityFilled) : null,
-        source: 'HIDEKI_RPC' });
-    }
-    return { to, chunkEvents };
-  };
-  // The first historic scan covers thousands of blocks. Four bounded concurrent ranges
-  // keep the proof panel responsive while retaining complete, ordered checkpoints.
-  for (let from = scannedThrough + 1n; from <= head; from += 4000n) {
-    const starts = Array.from({ length: 4 }, (_, index) => from + BigInt(index) * 1000n)
-      .filter(start => start <= head);
-    const chunks = await Promise.all(starts.map(scanChunk));
-    for (const chunk of chunks) {
-      scannedEvents.push(...chunk.chunkEvents);
-      scannedThrough = chunk.to;
-    }
-  }
-  events.push(...scannedEvents);
+  // A full-range log scan grew by thousands of RPC calls and blocked every live history request.
+  // This endpoint reports the immutable verified placement and the current owner account only.
+  // The separately verified later fill is available through Execution Replay.
   const unique = [...new Map(events.map(e => [`${e.txHash}:${e.logIndex}`, e])).values()]
     .sort((a, b) => BigInt(a.block) < BigInt(b.block) ? -1 : BigInt(a.block) > BigInt(b.block) ? 1 : a.logIndex - b.logIndex);
   const open = discovery.chainId === 50383 && BigInt(discovery.block) >= FIRST_BLOCK &&
     discovery.orders.some(row => row.id === FIRST_ORDER_ID);
   return { proof, events: unique, lifecycle: classifyLifecycle(unique, open),
-    readBlock: discovery.block, scanThroughBlock: head.toString(),
+    readBlock: discovery.block, scanThroughBlock: FIRST_BLOCK.toString(),
+    scanStatus: 'PARTIAL_VERIFIED_PLACEMENT_ONLY' as const,
     position: { sizeBtc: formatUnits(BigInt(discovery.position.sizeRaw), 8),
       entryPrice: formatUnits(BigInt(discovery.position.entryPriceRaw), 18), block: discovery.block },
     openOrders: discovery.orders.map(row => ({ id: row.id, side: row.side,

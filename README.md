@@ -1,5 +1,7 @@
 # Perp Canary
 
+**Product status (M8, 2026-10-28):** Perp Canary is an execution-intelligence and risk-management workspace for on-chain perpetual traders, beginning with dreamDEX on Somnia. The existing guarded terminal now includes a 21-market Radar, browser-local open-tab Alerts, paginated SDK Trade Journal and improved estimated position sizing. [Trader guide](docs/product-feature-guide.md) · [M8 acceptance](docs/m8-product-acceptance.md) · [security review](docs/m8-security-review.md). The repository has not been pushed or publicly deployed for this milestone.
+
 **A guarded dreamDEX perpetual trading terminal on Somnia Hideki testnet (chain 50383).** Perp Canary connects an injected EIP-1193 wallet, discovers verified USDso perp markets, shows fresh pinned order books, and prepares wallet-confirmed PostOnly orders. Canary Trade Guard checks the market, exact account, size, price, margin, pool permission, gas, nonce, expiry, calldata and contract simulation immediately before a wallet prompt.
 
 The product has two distinct account modes:
@@ -65,6 +67,8 @@ node --experimental-strip-types scripts/m53-delegated-readiness.ts
 
 `test:ui` uses Chromium and mocked wallet transactions by default. Set `CANARY_UI_LIVE=1` to add a **read-only** live Hideki browser smoke; it still does not sign. The readiness script only reads and estimates gas. Test fixtures and simulations are separate from the independently verified historical MetaMask trade.
 
+Set `CANARY_UI_LIVE_RADAR=1` for the separate read-only 21-market Chromium Radar and SDK Journal smoke. This is a resource-bounded scan, but it makes 21 real snapshot reads and requires outbound HTTPS and WebSocket. [Fixture screenshots](docs/screenshots/m8-market-radar-fixture.png) are separate from [live Radar](docs/screenshots/m8-market-radar-live.png) and [live Journal](docs/screenshots/m8-trade-journal-live.png). Open-tab alerts do not notify after the browser closes; fees, 24h metrics and realized PnL remain unavailable without verified source coverage.
+
 ## Demo and submission
 
 - [Judge walkthrough and English submission draft](docs/m6-submission-pack.md)
@@ -80,3 +84,5 @@ node --experimental-strip-types scripts/m53-delegated-readiness.ts
 - [Historical bot proof](docs/verified-onchain-evidence.md)
 
 No push, deployment or submission is performed by this repository workflow.
+
+For owner-approved publication preparation, see the [deployment plan](docs/m8-deployment-plan.md), [submission draft](docs/submission/dorahacks-submission.md) and [two-minute demo](docs/submission/demo-script.md). `Dockerfile`, `fly.example.toml` and `.env.example` are templates only.

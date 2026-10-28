@@ -48,13 +48,13 @@ const checked = (value: string): Address => {
   if (!isAddress(value, { strict: false })) throw Error('Valid connected operator address required');
   return getAddress(value);
 };
-async function withSdk<T>(work: (sdk: SomniaMarkets) => Promise<T>): Promise<T> {
+async function withSdk<T>(work: (sdk: SomniaMarkets) => Promise<T>, timeoutMs = 45_000): Promise<T> {
   const controller = new AbortController();
   const sdk = new SomniaMarkets({ chain: hidekiTestnet,
     wsRpcUrl: 'wss://api.hideki2.infra.testnet.somnia.network/ws',
     indexerUrl: 'https://hideki-dev.smk.somnia.host/v1/graphql',
     addresses: SOMNIA_HIDEKI_TESTNET_ADDRESSES, signal: controller.signal });
-  return withSnapshotSdk(sdk, controller, () => work(sdk), () => 'reading delegated perps account', 45_000);
+  return withSnapshotSdk(sdk, controller, () => work(sdk), () => 'reading delegated perps account', timeoutMs);
 }
 export async function readDelegatedAccount(rawOperator: string, marketId = 'BTC-PERP') {
   const operator = checked(rawOperator);
@@ -237,12 +237,14 @@ export async function readDelegatedReceipt(hash: string, rawOperator: string, ma
 }
 
 export async function readAccountOrderHistory(rawOperator: string, mode: 'DIRECT' | 'DELEGATED_PERPS',
-  marketId: string) {
+  marketId: string, offset = 0) {
+  if (!Number.isInteger(offset) || offset < 0 || offset > 1000) throw Error('Invalid history page offset');
   const operator = checked(rawOperator), market = await verifiedMarket(marketId);
   const owner = mode === 'DELEGATED_PERPS' ? KNOWN_EMBEDDED : operator;
   const rows = await withSdk(sdk => sdk.client.listPerpOrderHistory(owner,
-    { pool: market.pool, limit: 20, orderBy: 'ended' }));
+    { pool: market.pool, limit: 20, offset, orderBy: 'ended' }), 20_000);
   return { mode, owner, market: market.symbol, observedAt: new Date().toISOString(),
+    offset, nextOffset: rows.length === 20 && offset + 20 <= 1000 ? offset + 20 : null,
     source: 'OFFICIAL_SDK_INDEXER_NONFINAL', note: 'Indexer history can lag; receipt and on-chain open orders decide current state.',
     rows: rows.map(row => ({ id: row.orderId, side: row.isBid ? 'BUY' : 'SELL',
       price: formatUnits(BigInt(row.price), market.quoteDecimals),

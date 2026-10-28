@@ -263,7 +263,7 @@
     renderOwnerAccount(h);
     set('order-state', h.lifecycle.state); set('order-cause', h.lifecycle.cause);
     const items = h.events.map(e => timelineItem(e.name, `Block ${e.block} · tx ${e.txHash.slice(0, 12)}… · ${e.source}${e.quantityRaw ? ` · ${Number(e.quantityRaw) / 1e8} BTC` : ''}`));
-    items.push(timelineItem(h.lifecycle.state, `Open-order and position read at block ${h.readBlock}; events scanned through ${h.scanThroughBlock}. Cause: ${h.lifecycle.cause}.`));
+    items.push(timelineItem(h.lifecycle.state, `Open-order and position read at block ${h.readBlock}; verified placement through block ${h.scanThroughBlock}. Later events are not exhaustively scanned here. Cause: ${h.lifecycle.cause}.`));
     $('timeline').replaceChildren(...items);
   }
   function renderProof(p) {

@@ -393,7 +393,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#trade-review').waitFor();
     assert.equal(await page.locator('#guard-decision').textContent(), 'SAFE');
     mkdirSync('docs/screenshots', { recursive: true });
-    await page.locator('.trade-panel').screenshot({ path: 'docs/screenshots/m74-trade-ticket.png' });
+    await page.locator('.trade-panel').screenshot({ path: 'test-results/m74-trade-ticket.png' });
     mkdirSync('test-results', { recursive: true });
     await page.screenshot({ path: 'test-results/m5-wallet-review-mocked.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -585,7 +585,7 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
     await page.locator('#account-tab-button-positions').click();
     assert.equal(await page.locator('.position-table th').count(), 9);
     assert.match(await page.locator('.position-attribution').textContent(), /0\.00013 BTC/);
-    await page.locator('.position-table-wrap').screenshot({ path: 'docs/screenshots/m74-position-table.png' });
+    await page.locator('.position-table-wrap').screenshot({ path: 'test-results/m74-position-table.png' });
     await page.locator('#account-tab-button-history').click();
     await page.locator('#load-order-history').click();
     await page.locator('#history-rows').getByText(/#421.*Cancelled/).waitFor();
@@ -720,8 +720,122 @@ test('real Chromium MOCKED: candle zoom, pan, tooltip, timeframe and reset', asy
     assert.equal(await page.locator('#candle-canvas').getAttribute('data-view-count'), '48');
     assert.equal(await page.locator('#candle-canvas').getAttribute('data-view-offset'), '0');
     mkdirSync('docs/screenshots', { recursive: true });
-    await page.screenshot({ path: 'docs/screenshots/m74-terminal-desktop.png', fullPage: true });
+    await page.screenshot({ path: 'test-results/m74-terminal-desktop.png', fullPage: true });
     assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: Radar scans markets, alerts cross once, and workspace navigation', async () => {
+  const { context, page, errors, setMarket } = await fixturePage();
+  try {
+    await page.locator('#workspace-radar').click();
+    assert.equal(await page.locator('#radar-rows tr').count(), 2);
+    await page.locator('#radar-scan').click();
+    await page.waitForFunction(() => !document.getElementById('radar-scan').disabled);
+    assert.match(await page.locator('#radar-rows').textContent(), /BTC-PERP/);
+    assert.match(await page.locator('#radar-rows').textContent(), /ETH-PERP/);
+    assert.match(await page.locator('#radar-rows').textContent(), /\/100/);
+    mkdirSync('docs/screenshots', { recursive: true });
+    await page.screenshot({ path: 'docs/screenshots/m8-market-radar-fixture.png', fullPage: true });
+    setMarket({ error: 'BTC source temporarily unavailable' });
+    await page.locator('#radar-scan').click();
+    await page.waitForFunction(() => !document.getElementById('radar-scan').disabled);
+    assert.match(await page.locator('#radar-rows tr').filter({ hasText: 'BTC-PERP' }).textContent(), /Unavailable/);
+    assert.match(await page.locator('#radar-rows tr').filter({ hasText: 'ETH-PERP' }).textContent(), /\/100/);
+    setMarket(market());
+    await page.locator('#radar-rows tr').filter({ hasText: 'ETH-PERP' }).getByRole('button', { name: 'Inspect market' }).click();
+    assert.equal(await page.locator('#market-select').inputValue(), 'ETH-PERP');
+    await page.locator('#market-select').selectOption('BTC-PERP');
+    await page.locator('#workspace-alerts').click();
+    await page.locator('#alert-market').selectOption('BTC-PERP');
+    await page.locator('#alert-type').selectOption('PRICE_ABOVE');
+    await page.locator('#alert-threshold').fill('79900');
+    await page.locator('#alert-save').click();
+    await page.locator('#alerts-check').click();
+    await page.waitForFunction(() => !document.getElementById('alerts-check').disabled);
+    assert.equal(await page.locator('#alert-events p').count(), 0);
+    setMarket(market('34470002', '80000'));
+    await page.locator('#alerts-check').click();
+    await page.waitForFunction(() => !document.getElementById('alerts-check').disabled);
+    assert.equal(await page.locator('#alert-events p').count(), 1);
+    await page.locator('#alerts-check').click();
+    await page.waitForFunction(() => !document.getElementById('alerts-check').disabled);
+    assert.equal(await page.locator('#alert-events p').count(), 1);
+    await page.locator('#alert-events button').click();
+    assert.match(await page.locator('#alert-events').textContent(), /acknowledged/);
+    await page.screenshot({ path: 'docs/screenshots/m8-alerts-fixture.png', fullPage: true });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#workspace-alerts').click();
+    assert.equal(await page.locator('.product-alert').count(), 1);
+    await page.locator('.product-alert button').getByText('Edit').click();
+    await page.locator('#alert-threshold').fill('80500');
+    await page.locator('#alert-save').click();
+    assert.match(await page.locator('.product-alert').textContent(), /80500/);
+    await page.locator('.product-alert button').getByText('Pause').click();
+    assert.match(await page.locator('.product-alert').textContent(), /PAUSED/);
+    await page.locator('.product-alert button').getByText('Delete').click();
+    assert.equal(await page.locator('.product-alert').count(), 0);
+    await page.locator('#workspace-plan').click();
+    await page.locator('.sizing-card').screenshot({ path: 'docs/screenshots/m8-position-sizing-fixture.png' });
+    await page.locator('#workspace-terminal').click();
+    await page.screenshot({ path: 'docs/screenshots/m8-terminal-fixture.png', fullPage: true });
+    assert.deepEqual(errors.filter(message => !message.includes('503 (Service Unavailable)')), []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: journal pages deduplicate, filter, export and keep source limits', async () => {
+  const { context, page, errors } = await fixturePage(() => {
+    window.ethereum = { on() {}, async request({ method }) {
+      if (method === 'eth_accounts') return ['0x1111111111111111111111111111111111111111'];
+      if (method === 'eth_chainId') return '0xc4cf';
+      throw Error('Unexpected wallet method');
+    } };
+  });
+  try {
+    await page.route('**/api/v1/trade/history?**', route => {
+      const offset = Number(new URL(route.request().url()).searchParams.get('offset') || 0);
+      route.fulfill({ json: { owner: '0x1111111111111111111111111111111111111111',
+        note: 'SDK indexer can lag', nextOffset: offset === 0 ? 20 : null,
+        rows: offset === 0 ? [{ id: '42', side: 'BUY', price: '79800', originalQuantity: '0.1',
+          filledQuantity: '0', status: 'Cancelled', endedAt: '2026-10-27T18:00:00Z', placedTxHash: '0xabc' }] :
+          [{ id: '42', side: 'BUY', price: '79800', originalQuantity: '0.1', filledQuantity: '0.05',
+            status: 'Filled', endedAt: '2026-10-27T18:00:00Z', placedTxHash: '0xabc' },
+          { id: '43', side: 'SELL', price: '80000', originalQuantity: '0.2', filledQuantity: '0',
+            status: 'Cancelled', endedAt: '2026-10-27T19:00:00Z', placedTxHash: '0xdef' }] } });
+    });
+    await page.locator('#workspace-journal').click();
+    await page.locator('#journal-rows tr').first().waitFor();
+    await page.locator('#journal-more').click();
+    await page.waitForFunction(() => !document.getElementById('journal-more').disabled ||
+      document.getElementById('journal-status').textContent.includes('last page'));
+    assert.equal(await page.locator('#journal-rows tr').count(), 2);
+    assert.match(await page.locator('#journal-analytics').textContent(), /0\.05000000 BTC/);
+    await page.locator('#journal-status-filter').selectOption('Filled');
+    assert.equal(await page.locator('#journal-rows tr').count(), 1);
+    assert.equal(await page.locator('#journal-export').isEnabled(), true);
+    const download = page.waitForEvent('download');
+    await page.locator('#journal-export').click();
+    assert.equal((await download).suggestedFilename(), 'perp-canary-journal.csv');
+    await page.screenshot({ path: 'docs/screenshots/m8-trade-journal-fixture.png', fullPage: true });
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: slow historical read never blocks market switching or book', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    await page.route('**/api/v1/terminal/history', async route => {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      await route.fulfill({ status: 503, json: { error: 'History indexer delayed' } });
+    });
+    await page.locator('#refresh').click();
+    await page.locator('#market-select').selectOption('ETH-PERP');
+    await page.locator('#book-badge').getByText('TRUSTED').waitFor();
+    assert.equal(await page.locator('#market-select').inputValue(), 'ETH-PERP');
+    await page.locator('#sell').click();
+    assert.equal(await page.locator('#use-ask').isEnabled(), true);
+    await page.locator('#timeline').getByText(/Read-only RPC history unavailable/).waitFor();
+    assert.deepEqual(errors.filter(message => !message.includes('503 (Service Unavailable)')), []);
   } finally { await context.close(); }
 });
 
@@ -928,3 +1042,60 @@ test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1'
     await page.screenshot({ path: 'test-results/ui-qa-live.png', fullPage: true });
   } finally { await context.close(); }
 });
+
+test('real Chromium: live M8 Radar and SDK Journal read-only smoke',
+  { skip: process.env.CANARY_UI_LIVE_RADAR !== '1', timeout: 300000 }, async () => {
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => { window.ethereum = { on() {}, async request({ method }) {
+      if (method === 'eth_accounts') return ['0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42'];
+      if (method === 'eth_chainId') return '0xc4cf';
+      throw Error('Read-only live smoke blocks signing and sending');
+    } }; });
+    try {
+      await page.goto(base, { waitUntil: 'domcontentloaded' });
+      await page.locator('#workspace-radar').click();
+      await page.waitForFunction(() => document.querySelectorAll('#radar-rows tr').length === 21,
+        undefined, { timeout: 90000 });
+      await page.locator('#radar-scan').click();
+      await page.waitForFunction(() => !document.getElementById('radar-scan').disabled,
+        undefined, { timeout: 240000 });
+      const coverage = await page.locator('#radar-rows tr').count();
+      const scored = await page.locator('#radar-rows tr').filter({ hasText: /\/100/ }).count();
+      process.stdout.write(`LIVE M8 RADAR ${JSON.stringify({ coverage, scored,
+        progress: await page.locator('#radar-progress').textContent() })}\n`);
+      assert.equal(coverage, 21);
+      assert.ok(scored > 0, 'at least one market must have fresh trusted quote and depth');
+      assert.doesNotMatch(await page.locator('#radar-rows').textContent(), /Invalid Date/);
+      mkdirSync('docs/screenshots', { recursive: true });
+      await page.screenshot({ path: 'docs/screenshots/m8-market-radar-live.png', fullPage: true });
+      await page.locator('#workspace-terminal').click();
+      await page.locator('#mode-delegated').click();
+      await page.locator('#workspace-journal').click();
+      await page.waitForFunction(() => !document.getElementById('journal-load').disabled,
+        undefined, { timeout: 45000 });
+      process.stdout.write(`LIVE M8 JOURNAL ${await page.locator('#journal-status').textContent()}\n`);
+      await page.screenshot({ path: 'docs/screenshots/m8-trade-journal-live.png', fullPage: true });
+    } finally { await context.close(); }
+  });
+
+test('real Chromium: live M8 Journal evidence columns',
+  { skip: process.env.CANARY_UI_LIVE_JOURNAL !== '1', timeout: 90000 }, async () => {
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => { window.ethereum = { on() {}, async request({ method }) {
+      if (method === 'eth_accounts') return ['0x6Fa3659a15e9264E43EC67Fe4bB5d31D38109A42'];
+      if (method === 'eth_chainId') return '0xc4cf';
+      throw Error('Read-only live smoke blocks signing and sending');
+    } }; });
+    try {
+      await page.goto(base, { waitUntil: 'domcontentloaded' });
+      await page.locator('#mode-delegated').click();
+      await page.locator('#workspace-journal').click();
+      await page.locator('#journal-rows tr').first().waitFor({ timeout: 45000 });
+      await page.locator('#journal-rows tr').filter({ hasText: '14978756187852164141712' }).getByText('MAKER').waitFor();
+      assert.match(await page.locator('#journal-rows').textContent(), /Only 0\.00013 BTC increment/);
+      mkdirSync('docs/screenshots', { recursive: true });
+      await page.screenshot({ path: 'docs/screenshots/m8-trade-journal-live.png', fullPage: true });
+    } finally { await context.close(); }
+  });

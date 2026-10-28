@@ -53,6 +53,8 @@ const executionReplayPath = resolve('web/execution-replay.js');
 const guardV2Path = resolve('web/guard-v2.js');
 const sourceHealthPath = resolve('web/source-health.js');
 const marketSelectorPath = resolve('web/market-selector.js');
+const productIntelligencePath = resolve('web/product-intelligence.js');
+const productWorkspacesPath = resolve('web/product-workspaces.js');
 const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
@@ -70,6 +72,9 @@ const previousRadar = new Map<string, RadarInput>();
 const port = Number(process.env.CANARY_PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CANARY_PORT');
 const publicSite = publicOrigin();
+const bindHost = process.env.CANARY_HOST ?? '127.0.0.1';
+if (bindHost !== '127.0.0.1' && !(bindHost === '0.0.0.0' && publicSite))
+  throw Error('Non-loopback bind requires explicit public HTTPS mode');
 const limiter = new RequestLimiter();
 
 async function jsonBody(request: import('node:http').IncomingMessage): Promise<Record<string, unknown>> {
@@ -150,7 +155,9 @@ createServer(async (request, response) => {
         riskPercent: String(body.riskPercent ?? ''), entry: String(body.entry ?? ''),
         stop: String(body.stop ?? ''), side: body.side as 'BUY' | 'SELL', baseDecimals: market.baseDecimals,
         quoteDecimals: market.quoteDecimals, lotSizeRaw: market.lotSizeRaw,
-        minQuantityRaw: market.minQuantityRaw, initialMarginBps: market.initialMarginBps }));
+        minQuantityRaw: market.minQuantityRaw, initialMarginBps: market.initialMarginBps,
+        tickSizeRaw: market.tickSizeRaw, absoluteRiskUsdso: body.absoluteRiskUsdso ? String(body.absoluteRiskUsdso) : undefined,
+        availableMarginUsdso: body.availableMarginUsdso ? String(body.availableMarginUsdso) : undefined }));
     } else if (request.method === 'GET' && path === '/api/v1/terminal/history') {
       json(response, 200, await readFirstOrderHistory());
     } else if (request.method === 'GET' && path === '/api/v1/terminal/account') {
@@ -177,7 +184,7 @@ createServer(async (request, response) => {
       const mode = params.get('mode');
       if (mode !== 'DIRECT' && mode !== 'DELEGATED_PERPS') throw Error('Valid account mode required');
       json(response, 200, await readAccountOrderHistory(params.get('account') ?? '', mode,
-        params.get('market') ?? 'BTC-PERP'));
+        params.get('market') ?? 'BTC-PERP', Number(params.get('offset') ?? '0')));
     } else if (request.method === 'POST' && path === '/api/v1/trade/delegated/prepare') {
       const body = await jsonBody(request);
       if (body.mode !== 'DELEGATED_PERPS' || body.orderType !== 'POST_ONLY' ||
@@ -261,6 +268,12 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/market-selector.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(marketSelectorPath));
+    } else if (request.method === 'GET' && path === '/product-intelligence.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(productIntelligencePath));
+    } else if (request.method === 'GET' && path === '/product-workspaces.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(productWorkspacesPath));
     } else if (request.method === 'GET' && path === '/canary-mark.svg') {
       response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       response.end(await readFile(canaryMarkPath));
@@ -488,4 +501,4 @@ createServer(async (request, response) => {
       json(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   }
-}).listen(port, '127.0.0.1', () => console.log(`Perp Canary http://127.0.0.1:${port}`));
+}).listen(port, bindHost, () => console.log(`Perp Canary http://${bindHost}:${port}`));

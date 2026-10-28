@@ -60,6 +60,7 @@ import { explainGuard } from './guard-v2.js';
       <p>Reference calculation only. A stop reference does not install a stop order.</p>
       <div class="sizing-fields"><label>Capital (USDso)<input id="size-capital" type="text" inputmode="decimal" placeholder="100"></label>
         <label>Risk (%)<input id="size-risk" type="text" inputmode="decimal" placeholder="1"></label>
+        <label>Or absolute risk budget (USDso)<input id="size-absolute-risk" type="text" inputmode="decimal" placeholder="Optional; overrides percent"></label>
         <label>Stop reference<input id="size-stop" type="text" inputmode="decimal" placeholder="Price"></label></div>
       <button id="calculate-size" class="button secondary full" type="button">Calculate from current entry</button>
       <p id="size-result" role="status" aria-live="polite">Enter capital, risk, a limit entry and stop reference.</p>
@@ -755,19 +756,20 @@ import { explainGuard } from './guard-v2.js';
     text('size-result', 'Calculating with verified market tick and lot…');
     const draft = { market: $('market-select').value, side: state.side, capital: $('size-capital').value.trim(),
       riskPercent: $('size-risk').value.trim(), entry: $('limit-price').value.trim(),
-      stop: $('size-stop').value.trim() };
+      stop: $('size-stop').value.trim(), absoluteRiskUsdso: $('size-absolute-risk').value.trim(),
+      availableMarginUsdso: state.accountData?.marginUnlocked ?? '' };
     try { const result = await request('/api/v1/intelligence/size', { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
       if (draft.market !== $('market-select').value || draft.side !== state.side ||
         draft.entry !== $('limit-price').value.trim()) throw Error('Market, side or entry changed; calculate again');
-      text('size-result', `${result.status}: ${result.quantity} ${$('market-select').value.replace('-PERP', '')} · notional ${result.notionalUsdso} USDso · estimated initial margin ${result.initialMarginUsdso} USDso · loss at stop reference ${result.lossAtStopUsdso} USDso. ${result.assumptions}`);
+      text('size-result', `${result.confidence} · ${result.status}: risk budget ${result.riskBudgetUsdso} USDso · ${result.quantity} ${$('market-select').value.replace('-PERP', '')} · notional ${result.notionalUsdso} USDso · estimated initial margin ${result.initialMarginUsdso} USDso · invalidation distance ${result.invalidationDistancePercent}% · loss at reference ${result.lossAtStopUsdso} USDso. ${result.assumptions}`);
       if (result.status === 'CALCULATED') { state.sizedQuantity = result.quantity;
         $('use-sized-quantity').disabled = false; }
     } catch (error) { text('size-result', `Sizing unavailable: ${error.message}`); }
   };
   $('use-sized-quantity').onclick = () => { if (!state.sizedQuantity) return;
     $('quantity').value = state.sizedQuantity; $('quantity').dispatchEvent(new window.Event('input', { bubbles: true })); };
-  for (const id of ['size-capital', 'size-risk', 'size-stop', 'limit-price']) $(id).addEventListener('input', () => {
+  for (const id of ['size-capital', 'size-risk', 'size-absolute-risk', 'size-stop', 'limit-price']) $(id).addEventListener('input', () => {
     state.sizedQuantity = null; $('use-sized-quantity').disabled = true;
   });
   $('market-select').onchange = () => { state.accountData = null; state.requestId++; accountSummary(); invalidate();

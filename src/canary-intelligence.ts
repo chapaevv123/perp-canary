@@ -3,22 +3,29 @@ import { formatUnits, parseUnits } from 'viem';
 export type SizingInput = { capital: string; riskPercent: string; entry: string; stop: string;
   side: 'BUY' | 'SELL';
   baseDecimals: number; quoteDecimals: number; lotSizeRaw: string; minQuantityRaw: string;
-  initialMarginBps: number };
+  initialMarginBps: number; tickSizeRaw?: string; absoluteRiskUsdso?: string; availableMarginUsdso?: string };
 export function calculatePositionSize(input: SizingInput) {
   const decimal = (value: string) => /^\d+(?:\.\d+)?$/.test(value);
-  if (![input.capital, input.riskPercent, input.entry, input.stop].every(decimal) ||
+  if (![input.capital, input.entry, input.stop].every(decimal) ||
+    !(input.absoluteRiskUsdso ? decimal(input.absoluteRiskUsdso) : decimal(input.riskPercent)) ||
     input.baseDecimals < 1 || input.baseDecimals > 36 || input.quoteDecimals !== 18)
     throw Error('Use positive decimal inputs and verified market precision');
   const capital = parseUnits(input.capital, 18), entry = parseUnits(input.entry, 18),
-    stop = parseUnits(input.stop, 18), riskPercent = parseUnits(input.riskPercent, 4);
+    stop = parseUnits(input.stop, 18), riskPercent = input.absoluteRiskUsdso ? 0n : parseUnits(input.riskPercent, 4);
   if (capital <= 0n || entry <= 0n || stop <= 0n || entry === stop ||
-    riskPercent <= 0n || riskPercent > 100n * 10n ** 4n) throw Error('Capital, entry, stop and risk must be valid');
+    (!input.absoluteRiskUsdso && (riskPercent <= 0n || riskPercent > 100n * 10n ** 4n)))
+    throw Error('Capital, entry, stop and risk must be valid');
+  if (input.tickSizeRaw && (BigInt(input.tickSizeRaw) <= 0n ||
+    entry % BigInt(input.tickSizeRaw) !== 0n || stop % BigInt(input.tickSizeRaw) !== 0n))
+    throw Error('Entry and invalidation reference must align to the verified tick size');
   if (input.side === 'BUY' ? stop >= entry : input.side === 'SELL' ? stop <= entry : true)
     throw Error('Stop reference must be below BUY entry or above SELL entry');
   const lot = BigInt(input.lotSizeRaw), minimum = BigInt(input.minQuantityRaw);
   if (lot <= 0n || minimum <= 0n || input.initialMarginBps < 1 || input.initialMarginBps > 10_000)
     throw Error('Market grid or margin factor is unverified');
-  const riskBudget = capital * riskPercent / (100n * 10n ** 4n);
+  const riskBudget = input.absoluteRiskUsdso ? parseUnits(input.absoluteRiskUsdso, 18) :
+    capital * riskPercent / (100n * 10n ** 4n);
+  if (riskBudget <= 0n || riskBudget > capital) throw Error('Risk budget must be positive and no larger than capital');
   const delta = entry > stop ? entry - stop : stop - entry;
   let quantity = riskBudget * 10n ** BigInt(input.baseDecimals) / delta;
   quantity = quantity / lot * lot;
@@ -28,13 +35,19 @@ export function calculatePositionSize(input: SizingInput) {
   const notional = quantity * entry / 10n ** BigInt(input.baseDecimals);
   const lossAtStop = quantity * delta / 10n ** BigInt(input.baseDecimals);
   const initialMargin = (notional * BigInt(input.initialMarginBps) + 9999n) / 10_000n;
-  return { status: quantity >= minimum && notional > 0n ? 'CALCULATED' as const : 'BELOW_MINIMUM' as const,
+  const marginAvailable = input.availableMarginUsdso && decimal(input.availableMarginUsdso) ?
+    parseUnits(input.availableMarginUsdso, 18) : null;
+  return { status: quantity < minimum || notional <= 0n ? 'BELOW_MINIMUM' as const :
+    marginAvailable !== null && initialMargin > marginAvailable ? 'INSUFFICIENT_MARGIN_ESTIMATE' as const : 'CALCULATED' as const,
+    confidence: 'ESTIMATED' as const,
     quantity: formatUnits(quantity, input.baseDecimals), quantityRaw: quantity.toString(),
     notionalUsdso: formatUnits(notional, 18), initialMarginUsdso: formatUnits(initialMargin, 18),
     riskBudgetUsdso: formatUnits(riskBudget, 18), lossAtStopUsdso: formatUnits(lossAtStop, 18),
+    invalidationDistancePercent: formatUnits(delta * 10_000n / entry, 2),
+    marginAvailableUsdso: marginAvailable === null ? null : formatUnits(marginAvailable, 18),
     cappedByGuard,
     maximumMarketLeverageX: 10_000 / input.initialMarginBps,
-    assumptions: `Stop is a reference only, not an installed order. Excludes funding, liquidation, slippage and fees.${
+    assumptions: `Stop is a reference only, not an installed order. Actual loss can exceed this estimate. Excludes funding, liquidation, slippage and fees.${
       cappedByGuard ? ' Quantity capped by the 100 USDso Canary Trade Guard limit.' : ''}` };
 }
 

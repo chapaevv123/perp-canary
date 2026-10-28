@@ -30,6 +30,9 @@ test('position scenario uses signed bigint size and excludes funding', () => {
 test('public route allowlist blocks legacy and bot routes; HTTPS origin and rate limit are exact', () => {
   const origin = new URL('https://terminal.example.org');
   assert.equal(publicRouteAllowed('/api/v1/trade/delegated/prepare', 'POST'), true);
+  assert.equal(publicRouteAllowed('/product-workspaces.js', 'GET'), true);
+  assert.equal(publicRouteAllowed('/product-intelligence.js', 'GET'), true);
+  assert.equal(publicRouteAllowed('/product-workspaces.js', 'POST'), false);
   assert.equal(publicRouteAllowed('/api/v1/bot-execution', 'GET'), false);
   assert.equal(publicRouteAllowed('/legacy', 'GET'), false);
   assert.equal(publicRequestRejection({ path: '/api/v1/trade/prepare', method: 'POST',
