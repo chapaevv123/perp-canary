@@ -99,6 +99,18 @@ import { explainGuard } from './guard-v2.js';
   panel.querySelector('.trade-facts').before(workflow);
   for (const selector of ['.account-mode', '.mode-explanation', '.wallet-summary'])
     panel.querySelector('.side-switch').before(workflow.querySelector(selector));
+  const compactAccount = document.createElement('div'); compactAccount.className = 'compact-account';
+  compactAccount.innerHTML = '<strong id="compact-account-name">Connect wallet</strong><span id="compact-account-mode">Direct Wallet</span><span id="compact-account-market">BTC-PERP</span><b id="compact-permission">Permission: Not checked</b>';
+  const permissionDetails = document.createElement('details'); permissionDetails.id = 'wallet-permission-details';
+  permissionDetails.className = 'wallet-permission-details';
+  permissionDetails.innerHTML = '<summary>Wallet & permissions</summary><dl class="permission-facts"><div><dt>Connected EOA</dt><dd id="permission-eoa">Not connected</dd></div><div><dt>Margin owner</dt><dd id="permission-owner">Not connected</dd></div><div><dt>Chain</dt><dd id="permission-chain">Not checked</dd></div><div><dt>Operator gas</dt><dd id="permission-gas">Not read</dd></div><div><dt>Free margin</dt><dd id="permission-margin">Not read</dd></div><div><dt>Selected pool grant</dt><dd id="permission-grant">Not checked</dd></div><div><dt>Evidence</dt><dd id="permission-evidence">Awaiting on-chain account read</dd></div><div><dt>Last refresh</dt><dd id="permission-refreshed">Not read</dd></div></dl>';
+  permissionDetails.append($('mode-explanation'), $('wallet-summary'));
+  const walletWarning = document.createElement('p'); walletWarning.id = 'wallet-warning';
+  walletWarning.className = 'wallet-warning'; walletWarning.hidden = true;
+  panel.querySelector('.side-switch').before(compactAccount, walletWarning, permissionDetails);
+  const guardDetails = document.createElement('details'); guardDetails.id = 'guard-check-details';
+  guardDetails.innerHTML = '<summary>View detailed checks</summary>';
+  $('guard-checks').before(guardDetails); guardDetails.append($('guard-checks'));
   const accountDesk = document.createElement('section');
   accountDesk.className = 'account-desk'; accountDesk.setAttribute('aria-label', 'Account workspace');
   const walletOrders = workflow.querySelector('#wallet-orders');
@@ -140,6 +152,17 @@ import { explainGuard } from './guard-v2.js';
   const ordersPane = byName.get('orders').pane;
   ordersPane.innerHTML = '<h3>Live open orders</h3><p>Only orders on the selected account and market are shown. Cancel requires a separate fresh review and wallet confirmation.</p>';
   ordersPane.append(walletOrders);
+  const positionsPane = byName.get('positions').pane;
+  const positionTable = document.createElement('div'); positionTable.className = 'position-table-wrap';
+  positionTable.innerHTML = '<table class="position-table"><thead><tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unrealized PnL</th><th>Funding owed</th><th>Free margin</th><th>Liq. reference</th></tr></thead><tbody><tr><td id="position-table-market">BTC-PERP</td><td id="position-table-side">—</td><td id="position-table-size">—</td><td id="position-table-entry">—</td><td id="position-table-mark">—</td><td id="position-table-pnl">—</td><td id="position-table-funding">—</td><td id="position-table-margin">—</td><td id="position-table-liquidation">—</td></tr></tbody></table>';
+  positionsPane.querySelector('#wallet-position').after(positionTable);
+  const advancedPosition = document.createElement('details'); advancedPosition.className = 'position-advanced';
+  advancedPosition.innerHTML = '<summary>Position intelligence, full evidence & price scenario</summary>';
+  advancedPosition.append(positionsPane.querySelector('.position-intelligence'));
+  positionTable.after(advancedPosition);
+  const attribution = document.createElement('p'); attribution.className = 'position-attribution';
+  attribution.textContent = 'Current wallet position is separate from historical Canary execution. Only the verified 0.00013 BTC increment belongs to that BTC order. Scenario values are estimates.';
+  advancedPosition.after(attribution);
   const journal = workflow.querySelector('.wallet-journal');
   const historyPane = byName.get('history').pane;
   historyPane.innerHTML = '<h3>Finished orders · SDK indexer</h3><p>Indexer history can lag the current on-chain order state.</p>';
@@ -170,9 +193,15 @@ import { explainGuard } from './guard-v2.js';
   const text = (id, value) => { $(id).textContent = value; };
   const displayNumber = (value, digits = 6) => value == null || value === '' ? 'Unavailable' : Number.isFinite(Number(value)) ?
     Number(value).toLocaleString('en-US', { maximumFractionDigits: digits }) : String(value);
+  function positionCell(id, value, digits = 6) {
+    const node = $(id);
+    node.textContent = value == null ? 'Unavailable' : displayNumber(value, digits);
+    node.title = value == null ? 'This metric is unavailable from the current SDK snapshot' : String(value);
+  }
   function renderGuardV2(plan, draft) {
     const report = explainGuard(plan, draft, Number($('guard-spread').value));
     text('guard-decision', report.decision);
+    $('guard-decision').dataset.state = report.decision;
     text('guard-explanation', `${report.nextAction} ${report.blockers?.join(' ') || ''}`.trim());
     $('guard-checks').replaceChildren(...report.checks.map(check => {
       const row = document.createElement('div'); row.className = 'guard-check';
@@ -183,10 +212,63 @@ import { explainGuard } from './guard-v2.js';
     }));
     return report;
   }
+  function idleGuard() {
+    const quantity = $('quantity').value.trim(), price = $('limit-price').value.trim();
+    const error = $('trade-error').textContent.trim();
+    let decision, explanation;
+    if (!quantity || !price) {
+      decision = 'NOT READY'; explanation = !quantity && !price ?
+        'Enter a quantity and a valid PostOnly limit price to review this order.' :
+        !quantity ? 'Enter a valid quantity to review this order.' : 'Enter a valid limit price to review this order.';
+    } else if (!connected()) {
+      decision = 'NOT READY'; explanation = state.account ? 'Switch wallet to Somnia Hideki 50383.' : 'Connect a wallet to review this order.';
+    } else if (/fresh TRUSTED quote/i.test(error)) {
+      decision = 'UNAVAILABLE'; explanation = 'A fresh trusted book is required. Refresh the selected market and try again.';
+    } else if (!$('trade-error').classList.contains('okay')) {
+      decision = 'BLOCKED'; explanation = error || 'Correct the order parameters before review.';
+    } else {
+      decision = 'READY FOR REVIEW'; explanation = 'Inputs are valid. Review will check current permissions, margin, gas and contract simulation.';
+    }
+    text('guard-verdict', decision === 'NOT READY' ? 'INPUTS' : decision === 'READY FOR REVIEW' ? 'PREFLIGHT PENDING' : decision);
+    $('guard-verdict').dataset.verdict = decision.replaceAll(' ', '_');
+    text('guard-decision', decision);
+    $('guard-decision').dataset.state = decision;
+    text('guard-explanation', explanation);
+    $('guard-checks').replaceChildren(); guardDetails.open = false;
+    $('review-order').disabled = decision !== 'READY FOR REVIEW' || state.busy || !!state.pendingHash || !!state.actionPending;
+    $('review-order').title = $('review-order').disabled ? explanation : 'Run fresh Canary Guard checks and contract simulation; no transaction is sent.';
+  }
   $('guard-spread').onchange = () => { if (state.plan) renderGuardV2(state.plan.result, state.plan.input); };
   const validChain = () => state.chainId === 50383;
   const connected = () => !!state.account && validChain();
   const delegated = () => state.mode === 'DELEGATED_PERPS';
+  function accountSummary(data = null) {
+    text('compact-account-name', delegated() ? 'Wallet 1' : state.account ? 'Direct wallet' : 'Connect wallet');
+    text('compact-account-mode', delegated() ? 'Delegated Perps' : 'Direct Wallet');
+    text('compact-account-market', $('market-select').value);
+    const verified = data && data.market === $('market-select').value &&
+      data.account?.toLowerCase() === state.account?.toLowerCase();
+    const permission = !connected() ? 'Not ready' : !verified ? 'Checking' :
+      delegated() ? data.permissions?.place ? 'Active' : 'Blocked' : 'Direct wallet';
+    text('compact-permission', `Permission: ${permission}`);
+    $('compact-permission').dataset.state = permission.toLowerCase().replace(' ', '-');
+    text('permission-eoa', state.account ?? 'Not connected');
+    text('permission-owner', verified ? data.owner ?? state.account : 'Not verified');
+    text('permission-chain', validChain() ? 'Somnia Hideki · 50383' : state.account ? 'Wrong network' : 'Not connected');
+    text('permission-gas', verified ? `${displayNumber(data.gasStt)} STT` : 'Not read');
+    text('permission-margin', verified ? `${displayNumber(data.marginUnlocked)} USDso` : 'Not read');
+    text('permission-grant', verified ? delegated() ?
+      `Place ${data.permissions?.place ? 'ACTIVE' : 'BLOCKED'} · Cancel ${data.permissions?.cancel ? 'ACTIVE' : 'BLOCKED'} · ${data.permissions?.scope ?? 'selected pool'}` :
+      'Operator grant not required for direct EOA' : 'Not checked for selected market');
+    text('permission-evidence', verified ? `Official SDK / on-chain account and selected pool · block ${data.block}` : 'Awaiting on-chain account read');
+    text('permission-refreshed', verified ? new Date().toLocaleTimeString() : 'Not read');
+    const warning = !state.account ? 'Connect a wallet to review an order.' : !validChain() ?
+      'Switch wallet to Somnia Hideki 50383.' : verified && delegated() && !data.permissions?.place ?
+        'Placement permission is blocked for this market. Review Wallet & permissions.' :
+        verified && Number(data.gasStt) <= 0 ? 'Operator gas balance is empty. Add STT before review.' : '';
+    walletWarning.hidden = !warning;
+    walletWarning.textContent = warning;
+  }
   const prepareUrl = () => delegated() ? '/api/v1/trade/delegated/prepare' : '/api/v1/trade/prepare';
   const receiptUrl = mode => mode === 'DELEGATED_PERPS' ? '/api/v1/trade/delegated/receipt' : '/api/v1/trade/receipt';
   const actionReceiptUrl = entry => entry.mode === 'DELEGATED_PERPS' ?
@@ -234,6 +316,11 @@ import { explainGuard } from './guard-v2.js';
   };
   function clearPositionIntelligence(message) {
     state.positionMetrics = null;
+    text('position-table-market', $('market-select').value);
+    for (const id of ['position-table-side', 'position-table-size', 'position-table-entry',
+      'position-table-mark', 'position-table-pnl', 'position-table-funding',
+      'position-table-margin', 'position-table-liquidation']) positionCell(id, null);
+    $('position-table-pnl').className = '';
     text('position-intelligence-status', message);
     for (const id of ['metric-direction', 'metric-prices']) text(id, '—');
     for (const id of ['metric-upnl', 'metric-funding', 'metric-liquidation', 'metric-realized'])
@@ -260,6 +347,17 @@ import { explainGuard } from './guard-v2.js';
       if (id !== state.positionRequestId || account !== state.account || mode !== state.mode ||
         market !== $('market-select').value) return;
       state.positionMetrics = data;
+      text('position-table-market', market);
+      text('position-table-side', data.direction);
+      positionCell('position-table-size', data.size, 8);
+      positionCell('position-table-entry', data.entryPrice, 4);
+      positionCell('position-table-mark', data.markPrice, 4);
+      positionCell('position-table-pnl', data.unrealizedPnlUsdso);
+      $('position-table-pnl').className = data.unrealizedPnlUsdso == null ? '' :
+        Number(data.unrealizedPnlUsdso) >= 0 ? 'positive' : 'negative';
+      positionCell('position-table-funding', data.accruedFundingOwedUsdso);
+      positionCell('position-table-margin', data.availableMarginUsdso);
+      positionCell('position-table-liquidation', data.liquidationPrice, 4);
       text('position-intelligence-status', `${data.source} · block ${data.block} · ${new Date(data.observedAt).toLocaleTimeString()}. Free margin ${displayNumber(data.availableMarginUsdso)} USDso (display rounded).`);
       text('metric-direction', `${data.direction} ${displayNumber(data.size, 8)} ${market.replace('-PERP', '')}`);
       text('metric-prices', data.entryPrice && data.markPrice ? `${displayNumber(data.entryPrice, 4)} / ${displayNumber(data.markPrice, 4)} USDso` : 'Unavailable: no priced position');
@@ -282,6 +380,7 @@ import { explainGuard } from './guard-v2.js';
       status('Finish or refresh the pending wallet transaction before switching accounts.', 'warn'); return;
     }
     state.mode = mode; state.accountData = null; state.requestId++;
+    accountSummary();
     state.positionRequestId++; state.positionMetrics = null;
     state.historyRequestId++; $('history-rows').replaceChildren();
     text('history-status', 'History not requested for this account mode.');
@@ -333,12 +432,8 @@ import { explainGuard } from './guard-v2.js';
   };
   function invalidate() {
     state.plan = null; $('trade-review').hidden = true;
-    $('review-order').disabled = !connected() || state.busy || !!state.pendingHash || !!state.actionPending;
     $('confirm-wallet').disabled = true;
-    text('guard-verdict', 'AWAITING REVIEW');
-    $('guard-verdict').dataset.verdict = 'AWAITING_REVIEW';
-    text('guard-decision', 'UNAVAILABLE'); $('guard-checks').replaceChildren();
-    text('guard-explanation', 'Review runs a fresh trusted-book, margin, gas and contract-simulation preflight.');
+    idleGuard();
     invalidateAction();
   }
   function invalidateAction() {
@@ -382,6 +477,7 @@ import { explainGuard } from './guard-v2.js';
       text('wallet-position', 'Connect a wallet to read your own position and open orders.');
       $('wallet-orders').replaceChildren(); }
     renderJournal();
+    accountSummary(state.accountData);
     invalidate();
   }
   async function loadAccount() {
@@ -399,6 +495,7 @@ import { explainGuard } from './guard-v2.js';
         data.account.toLowerCase() !== state.account.toLowerCase() ||
         selectedMarket !== $('market-select').value) return;
       state.accountData = data;
+      accountSummary(data);
       text('wallet-balances', delegated() ?
         `Operator gas ${data.gasStt} STT · Wallet 1 free margin ${data.marginUnlocked} USDso · owner ${data.owner}` :
         `EOA gas ${data.gasStt} STT · wallet USDso ${data.walletUsdso} · allowance ${data.allowance ?? 'UNKNOWN'} · EOA free margin ${data.marginUnlocked}`);
@@ -435,7 +532,7 @@ import { explainGuard } from './guard-v2.js';
       }
       loadPositionIntelligence();
     } catch (error) { if (id === state.requestId) {
-      state.accountData = null; text('wallet-balances', `Account read unavailable: ${error.message}`);
+      state.accountData = null; accountSummary(); text('wallet-balances', `Account read unavailable: ${error.message}`);
       text('wallet-permissions', delegated() ? 'Delegated permissions UNKNOWN; trading blocked until retry.' :
         'Direct balance UNKNOWN; trading blocked until retry.');
       text('wallet-position', 'Position and open orders UNKNOWN. Use Refresh balances or Refresh live data to retry.');
@@ -673,7 +770,7 @@ import { explainGuard } from './guard-v2.js';
   for (const id of ['size-capital', 'size-risk', 'size-stop', 'limit-price']) $(id).addEventListener('input', () => {
     state.sizedQuantity = null; $('use-sized-quantity').disabled = true;
   });
-  $('market-select').onchange = () => { state.accountData = null; state.requestId++; invalidate();
+  $('market-select').onchange = () => { state.accountData = null; state.requestId++; accountSummary(); invalidate();
     state.historyRequestId++; state.positionRequestId++; state.positionMetrics = null;
     clearPositionIntelligence('Reading the selected market position…');
     $('history-rows').replaceChildren();
@@ -805,7 +902,7 @@ import { explainGuard } from './guard-v2.js';
           `Transaction ${receipt.state}: ${receipt.reason ?? `block ${receipt.block}`}`,
         receipt.state === 'PLACED' ? 'ok' : 'error'); state.pendingHash = null; state.pendingAccount = null;
           state.pendingMarket = null; state.pendingMode = null; state.pendingData = null;
-          $('review-order').disabled = !connected(); }
+          $('review-order').disabled = !connected() || !$('trade-error').classList.contains('okay'); }
       } catch (error) { status(`Receipt read unavailable: ${error.message}`, 'error'); }
     }
   });
@@ -813,7 +910,11 @@ import { explainGuard } from './guard-v2.js';
     if (!connected() || state.busy || state.pendingHash || state.actionPending) return;
     state.plan = null; $('trade-review').hidden = true; $('confirm-wallet').disabled = true;
     $('preflight-details').hidden = true; text('preflight-details', '');
-    state.busy = true; $('review-order').disabled = true; status('Running Canary Trade Guard and contract simulation…');
+    state.busy = true; $('review-order').disabled = true;
+    text('guard-decision', 'CHECKING'); $('guard-decision').dataset.state = 'CHECKING';
+    text('guard-verdict', 'CHECKING');
+    text('guard-explanation', 'Checking fresh market, account, margin, gas and contract simulation…');
+    status('Running Canary Trade Guard and contract simulation…');
     const draft = input();
     try {
       const plan = await request(prepareUrl(), { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -841,7 +942,8 @@ import { explainGuard } from './guard-v2.js';
       status('Review the exact wallet order, then confirm explicitly.', 'ok');
     } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate();
       text('guard-decision', 'UNAVAILABLE'); text('guard-explanation', `Fresh checks could not complete: ${error.message}. Retry after market and RPC recover.`); }
-    finally { state.busy = false; $('review-order').disabled = !connected() || !!state.pendingHash; }
+    finally { state.busy = false; $('review-order').disabled = !connected() ||
+      !$('trade-error').classList.contains('okay') || !!state.pendingHash || !!state.actionPending; }
   };
   $('dismiss-review').onclick = () => { invalidate(); status('Order review closed.'); };
   $('confirm-wallet').onclick = async () => {
@@ -919,7 +1021,8 @@ import { explainGuard } from './guard-v2.js';
       }
       status(`Wallet trade stopped: ${error.message}`, 'error');
     }
-    finally { state.busy = false; $('review-order').disabled = !connected() || !!state.pendingHash; }
+    finally { state.busy = false; $('review-order').disabled = !connected() ||
+      !$('trade-error').classList.contains('okay') || !!state.pendingHash || !!state.actionPending; }
   };
   displayAccount(); loadMarkets();
 })();

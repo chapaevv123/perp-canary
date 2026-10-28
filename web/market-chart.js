@@ -2,22 +2,25 @@
   const panel = document.querySelector('.chart-panel');
   const wrap = panel.querySelector('.chart-wrap');
   const controls = document.createElement('div'); controls.className = 'chart-controls';
-  controls.innerHTML = '<label for="candle-interval">Indexed candles</label><select id="candle-interval" aria-label="Candle timeframe"><option value="60">1m</option><option value="300" selected>5m</option><option value="900">15m</option><option value="3600">1h</option><option value="14400">4h</option><option value="86400">1d</option></select><span id="candle-status" role="status">Loading real fill-derived history…</span>';
+  controls.innerHTML = '<label for="candle-interval">Fill-derived OHLCV</label><select id="candle-interval" aria-label="Candle timeframe"><option value="60">1m</option><option value="300" selected>5m</option><option value="900">15m</option><option value="3600">1h</option><option value="14400">4h</option><option value="86400">1d</option></select><button id="candle-reset" type="button" class="button secondary" disabled>Reset view</button><span id="candle-status" role="status">Loading real fill-derived history…</span>';
   panel.querySelector('.panel-head').after(controls);
   const canvas = document.createElement('canvas'); canvas.id = 'candle-canvas';
   canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', 'Indexed fill-derived candle chart');
   canvas.hidden = true; wrap.prepend(canvas);
   const hover = document.createElement('div'); hover.id = 'candle-hover'; hover.className = 'small';
-  hover.textContent = 'Hover or tap a candle for OHLC and real volume.'; wrap.after(hover);
+  hover.textContent = 'Wheel to zoom · drag to pan · hover or tap for OHLC and real volume.'; wrap.after(hover);
   const tape = document.createElement('div'); tape.className = 'market-tape';
   tape.innerHTML = '<div class="section-line"><strong>Recent market fills</strong><span id="tape-status">Loading indexed fills…</span></div><div id="tape-rows"></div>';
   panel.append(tape);
   const state = { symbol: document.getElementById('market-select').value, interval: 300,
-    candles: [], chartRequest: 0, tapeRequest: 0, chartAt: 0, tapeAt: 0, hover: -1 };
+    candles: [], chartRequest: 0, tapeRequest: 0, chartAt: 0, tapeAt: 0, hover: -1,
+    hoverY: null, viewCount: 0, viewOffset: 0, drag: null };
   const original = wrap.querySelector('svg');
   const empty = document.getElementById('chart-empty');
   function reset() {
-    state.candles = []; state.hover = -1; state.chartAt = 0; state.tapeAt = 0;
+    state.candles = []; state.hover = -1; state.hoverY = null; state.viewCount = 0;
+    state.viewOffset = 0; state.drag = null; state.chartAt = 0; state.tapeAt = 0;
+    document.getElementById('candle-reset').disabled = true;
     state.chartRequest++; state.tapeRequest++; canvas.hidden = true; original.hidden = false;
     panel.querySelector('h2').textContent = `${state.symbol} live mark trace`;
     empty.hidden = false; document.getElementById('candle-status').textContent = 'Loading real fill-derived history…';
@@ -33,9 +36,16 @@
       return value;
     } finally { window.clearTimeout(timer); }
   }
+  function visibleRows() {
+    const count = Math.min(state.viewCount || state.candles.length, state.candles.length);
+    const end = state.candles.length - state.viewOffset;
+    return state.candles.slice(Math.max(0, end - count), end);
+  }
   function draw() {
-    const rows = state.candles;
+    const rows = visibleRows();
     if (!rows.length || canvas.hidden) return;
+    canvas.dataset.viewCount = String(rows.length);
+    canvas.dataset.viewOffset = String(state.viewOffset);
     const box = wrap.getBoundingClientRect(); const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.max(320, Math.floor(box.width)), height = Math.max(230, Math.floor(box.height));
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
@@ -47,7 +57,7 @@
     const highs = rows.map(row => Number(row.high)), lows = rows.map(row => Number(row.low));
     const high = Math.max(...highs), low = Math.min(...lows), span = Math.max(high - low, high * 0.0002);
     const y = price => top + (high - price) / span * plotHeight;
-    ctx.strokeStyle = '#2d3848'; ctx.lineWidth = 1; ctx.font = '11px system-ui'; ctx.fillStyle = '#8fa4b8';
+    ctx.strokeStyle = '#2d3848'; ctx.lineWidth = 1; ctx.font = '12px system-ui'; ctx.fillStyle = '#a9bbca';
     for (let i = 0; i <= 4; i++) {
       const yy = top + i * plotHeight / 4;
       ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(width - right + 5, yy); ctx.stroke();
@@ -73,23 +83,50 @@
       const x = left + (state.hover + 0.5) * slot;
       ctx.strokeStyle = '#c4d5e5'; ctx.setLineDash([3, 4]); ctx.beginPath();
       ctx.moveTo(x, top); ctx.lineTo(x, height - 13); ctx.stroke(); ctx.setLineDash([]);
+      if (state.hoverY != null && state.hoverY >= top && state.hoverY <= top + plotHeight) {
+        ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(left, state.hoverY);
+        ctx.lineTo(width - right, state.hoverY); ctx.stroke(); ctx.setLineDash([]);
+      }
     }
     const first = new Date(rows[0].time * 1000), last = new Date(rows.at(-1).time * 1000);
     ctx.fillStyle = '#8fa4b8'; ctx.fillText(first.toLocaleString(), left, height - 12);
     const label = last.toLocaleString(); ctx.fillText(label, Math.max(left, width - right - ctx.measureText(label).width), height - 12);
   }
   function showHover() {
-    const row = state.candles[state.hover];
+    const row = visibleRows()[state.hover];
     hover.textContent = row ? `${new Date(row.time * 1000).toLocaleString()} · O ${row.open} H ${row.high} L ${row.low} C ${row.close} USDso · ${row.volumeBase} base volume · ${row.trades} fills` :
-      'Hover or tap a candle for OHLC and real volume.';
+      'Wheel to zoom · drag to pan · hover or tap for OHLC and real volume.';
     draw();
   }
   canvas.addEventListener('pointermove', event => {
     const rect = canvas.getBoundingClientRect();
-    state.hover = Math.min(state.candles.length - 1, Math.max(0, Math.floor((event.clientX - rect.left - 12) / ((rect.width - 84) / state.candles.length))));
+    if (state.drag) {
+      const step = (rect.width - 84) / Math.max(1, visibleRows().length);
+      state.viewOffset = Math.max(0, Math.min(state.candles.length - state.viewCount,
+        state.drag.offset + Math.round((event.clientX - state.drag.x) / step)));
+    }
+    state.hover = Math.min(visibleRows().length - 1, Math.max(0,
+      Math.floor((event.clientX - rect.left - 12) / ((rect.width - 84) / visibleRows().length))));
+    state.hoverY = event.clientY - rect.top;
     showHover();
   });
-  canvas.addEventListener('pointerleave', () => { state.hover = -1; showHover(); });
+  canvas.addEventListener('pointerdown', event => { if (!state.candles.length) return;
+    state.drag = { x: event.clientX, offset: state.viewOffset }; canvas.setPointerCapture(event.pointerId); });
+  canvas.addEventListener('pointerup', () => { state.drag = null; });
+  canvas.addEventListener('pointercancel', () => { state.drag = null; });
+  canvas.addEventListener('pointerleave', () => { if (state.drag) return;
+    state.hover = -1; state.hoverY = null; showHover(); });
+  canvas.addEventListener('wheel', event => { if (!state.candles.length) return;
+    event.preventDefault();
+    const current = state.viewCount || state.candles.length;
+    const next = current + (event.deltaY > 0 ? 1 : -1) * Math.max(4, Math.round(current * 0.15));
+    state.viewCount = Math.max(Math.min(20, state.candles.length), Math.min(state.candles.length, next));
+    state.viewOffset = Math.min(state.viewOffset, state.candles.length - state.viewCount);
+    state.hover = -1; showHover();
+  }, { passive: false });
+  document.getElementById('candle-reset').onclick = () => {
+    state.viewCount = state.candles.length; state.viewOffset = 0; state.hover = -1; showHover();
+  };
   new window.ResizeObserver(draw).observe(wrap);
   async function loadCandles() {
     const id = ++state.chartRequest, symbol = state.symbol, interval = state.interval;
@@ -102,7 +139,10 @@
       const rows = Array.isArray(result.candles) ? result.candles.filter(row =>
         Number.isFinite(Number(row.time)) && Number.isFinite(Number(row.high)) && Number.isFinite(Number(row.low)) &&
         Number(row.high) >= Number(row.low) && Number(row.low) > 0) : [];
-      state.candles = rows; canvas.hidden = !rows.length; original.hidden = !!rows.length; empty.hidden = !!rows.length;
+      state.candles = rows; state.viewCount = Math.min(state.viewCount || rows.length, rows.length);
+      state.viewOffset = Math.min(state.viewOffset, Math.max(0, rows.length - state.viewCount));
+      document.getElementById('candle-reset').disabled = !rows.length;
+      canvas.hidden = !rows.length; original.hidden = !!rows.length; empty.hidden = !!rows.length;
       document.getElementById('candle-status').textContent = rows.length ?
         `${rows.length} real fill-derived candles · official SDK indexer · checked ${new Date(result.observedAt).toLocaleTimeString()} · newest bucket may lag` :
         `History unavailable: ${result.reason || 'no indexed fill buckets'}. Live mark trace remains below.`;

@@ -4,6 +4,8 @@
 
 The product has two distinct account modes:
 
+M7.4 adds a compact account and permission summary, an expandable **Wallet & permissions** section, a position table, and zoom/pan/reset controls for real indexed candles. BUY PostOnly can select the fresh best bid; SELL PostOnly can select the fresh best ask. The crossing shortcut is disabled for each side. **READY FOR REVIEW** means inputs can be checked, while **SAFE** appears only after fresh Guard preflight. See [M7.4 acceptance](docs/m74-ux-acceptance.md) and [final report](docs/m74-final-report.md).
+
 | Mode | Who signs and pays gas | Whose margin, orders and position | Supported writes |
 | --- | --- | --- | --- |
 | **Delegated Perps** | Connected operator EOA | Linked dreamDEX Wallet 1 smart account | `placeOrderFor`, `cancelOrderFor` when the selected pool grants each selector |

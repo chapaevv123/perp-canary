@@ -162,7 +162,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.equal(await page.locator('#sell').isEnabled(), true);
     assert.equal(await page.locator('#order-type').isDisabled(), true);
     assert.equal(await page.locator('#use-ask').isDisabled(), true);
-    assert.match(await page.locator('#use-ask').getAttribute('title'), /would cross the book/);
+    assert.match(await page.locator('#use-ask').getAttribute('title'), /would cross the spread/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     assert.equal(await page.locator('#position-size').textContent(), '0.05416');
     assert.equal(await page.locator('#order-state').textContent(), 'NOT_OPEN_AT_READ');
@@ -315,7 +315,7 @@ test('real Chromium: M7 unavailable history and verified execution replay', asyn
 test('real Chromium: wallet review, rejection, guarded submission and mocked receipt', async () => {
   const account = '0x1111111111111111111111111111111111111111';
   const txHash = `0x${'a'.repeat(64)}`;
-  const { context, page, errors } = await fixturePage(() => {
+  const { context, page, errors, setMarket } = await fixturePage(() => {
     const wallet = '0x1111111111111111111111111111111111111111';
     const hash = `0x${'a'.repeat(64)}`;
     const listeners = {};
@@ -379,14 +379,21 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#wallet-details-close').click();
     await page.locator('#quantity').fill('0.00013');
     await page.locator('#use-bid').click();
+    assert.equal(await page.locator('#guard-decision').textContent(), 'READY FOR REVIEW');
+    assert.equal(await page.locator('#confirm-wallet').isDisabled(), true);
+    assert.equal(await page.locator('#use-ask').isDisabled(), true);
     prepareStatus = 'BLOCKED';
     await page.locator('#review-order').click();
     await page.locator('#guard-verdict').getByText('RED').waitFor();
+    assert.equal(await page.locator('#guard-decision').textContent(), 'BLOCKED');
     assert.equal(await page.locator('#trade-review').isHidden(), true);
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 0);
     prepareStatus = 'READY';
     await page.locator('#review-order').click();
     await page.locator('#trade-review').waitFor();
+    assert.equal(await page.locator('#guard-decision').textContent(), 'SAFE');
+    mkdirSync('docs/screenshots', { recursive: true });
+    await page.locator('.trade-panel').screenshot({ path: 'docs/screenshots/m74-trade-ticket.png' });
     mkdirSync('test-results', { recursive: true });
     await page.screenshot({ path: 'test-results/m5-wallet-review-mocked.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -430,15 +437,20 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#wallet-state').getByText(/Hideki 50383/).waitFor();
     await page.evaluate(() => window.__walletMock.changeAccount('0x2222222222222222222222222222222222222222'));
     await page.locator('#wallet-state').getByText(/0x2222/).waitFor();
+    setMarket({ error: 'read-only market transport unavailable' });
+    await page.locator('#refresh').click();
+    await page.locator('#book-badge').getByText('UNTRUSTED').waitFor();
+    assert.equal(await page.locator('#guard-decision').textContent(), 'UNAVAILABLE');
     await page.locator('#wallet-disconnect').click();
     assert.equal(await page.locator('#review-order').isDisabled(), true);
-    assert.deepEqual(errors, []);
+    assert.deepEqual(errors.filter(message => !message.includes('503 (Service Unavailable)')), []);
   } finally { await context.close(); }
 });
 
 test('real Chromium: missing injected wallet cannot review or submit', async () => {
   const { context, page, errors } = await fixturePage();
   try {
+    assert.equal(await page.locator('#guard-decision').textContent(), 'NOT READY');
     await page.locator('#historical-tools').click();
     assert.equal(await page.locator('#risk').isHidden(), true);
     await page.locator('#nav-funding').click();
@@ -564,7 +576,16 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
     await page.locator('#wallet-connect').click();
     await page.locator('#mode-delegated').click();
     await page.locator('#wallet-permissions').getByText(/place BLOCKED/).waitFor();
+    assert.equal(await page.locator('#compact-account-name').textContent(), 'Wallet 1');
+    assert.equal(await page.locator('#compact-account-mode').textContent(), 'Delegated Perps');
+    await page.locator('#wallet-permission-details summary').click();
+    assert.match(await page.locator('#permission-eoa').textContent(), /0x/);
+    await page.locator('#wallet-permission-details summary').click();
     assert.match(await page.locator('#wallet-balances').textContent(), /Wallet 1 free margin 999\.48/);
+    await page.locator('#account-tab-button-positions').click();
+    assert.equal(await page.locator('.position-table th').count(), 9);
+    assert.match(await page.locator('.position-attribution').textContent(), /0\.00013 BTC/);
+    await page.locator('.position-table-wrap').screenshot({ path: 'docs/screenshots/m74-position-table.png' });
     await page.locator('#account-tab-button-history').click();
     await page.locator('#load-order-history').click();
     await page.locator('#history-rows').getByText(/#421.*Cancelled/).waitFor();
@@ -628,6 +649,13 @@ test('real Chromium: verified market switching uses ETH decimals and resets obse
     assert.match(await page.locator('.book-labels').textContent(), /QTY \(ETH\)/);
     await page.locator('#quantity').fill('0.004');
     await page.locator('#use-bid').click();
+    assert.equal(await page.locator('#use-ask').isDisabled(), true);
+    await page.locator('#sell').click();
+    assert.equal(await page.locator('#use-bid').isDisabled(), true);
+    await page.locator('#use-ask').click();
+    assert.equal(await page.locator('#limit-price').inputValue(), '2346.50');
+    await page.locator('#buy').click();
+    await page.locator('#use-bid').click();
     assert.match(await page.locator('#notional').textContent(), /9\.39 USDso/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     assert.deepEqual(errors, []);
@@ -664,6 +692,35 @@ test('real Chromium: market dialog search, favorites, recents and rapid switchin
       Number(document.querySelector('#book-bid').textContent.replaceAll(',', '')) < 10000);
     assert.equal(await page.locator('#market-select').inputValue(), 'ETH-PERP');
     assert.match(await page.locator('.book-labels').textContent(), /QTY \(ETH\)/);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: candle zoom, pan, tooltip, timeframe and reset', async () => {
+  const { context, page, errors } = await fixturePage();
+  try {
+    const candles = Array.from({ length: 48 }, (_, i) => ({ time: 1793160000 + i * 300,
+      open: String(79800 + i), high: String(79802 + i), low: String(79799 + i),
+      close: String(79801 + i), volumeBase: '0.01', trades: 2 }));
+    await page.route('**/api/v1/markets/candles?**', route => route.fulfill({ json: {
+      status: 'AVAILABLE', source: 'MOCKED', observedAt: new Date().toISOString(), candles } }));
+    await page.locator('#candle-interval').selectOption('900');
+    await page.locator('#candle-canvas').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#candle-canvas').getAttribute('data-view-count'), '48');
+    const box = await page.locator('#candle-canvas').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    assert.match(await page.locator('#candle-hover').textContent(), /O .* H .* L .* C /);
+    await page.mouse.wheel(0, -450);
+    await page.waitForFunction(() => Number(document.querySelector('#candle-canvas').dataset.viewCount) < 48);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2);
+    await page.mouse.up();
+    assert.ok(Number(await page.locator('#candle-canvas').getAttribute('data-view-offset')) > 0);
+    await page.locator('#candle-reset').click();
+    assert.equal(await page.locator('#candle-canvas').getAttribute('data-view-count'), '48');
+    assert.equal(await page.locator('#candle-canvas').getAttribute('data-view-offset'), '0');
+    mkdirSync('docs/screenshots', { recursive: true });
+    await page.screenshot({ path: 'docs/screenshots/m74-terminal-desktop.png', fullPage: true });
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
@@ -847,7 +904,17 @@ test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1'
     await page.locator('#historical-tools').click();
     await page.locator('#proof-badge').getByText('VERIFIED').waitFor({ timeout: 15000 });
     await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor({ timeout: 90000 });
-    await page.locator('#order-state').getByText('NOT_OPEN_AT_READ').waitFor({ timeout: 90000 });
+    await page.waitForFunction(() => !document.getElementById('position-block').textContent.includes('REFRESHING'),
+      undefined, { timeout: 30000 });
+    await page.waitForFunction(() => !document.getElementById('timeline').textContent.includes('Reading verified proof'),
+      undefined, { timeout: 30000 });
+    const liveHistory = await page.locator('#order-state').textContent();
+    assert.match(liveHistory, /^(NOT_OPEN_AT_READ|UNKNOWN)$/);
+    if (liveHistory === 'UNKNOWN') {
+      const timeline = await page.locator('#timeline').textContent();
+      assert.match(timeline, /Read-only RPC history unavailable/);
+      process.stdout.write(`LIVE HISTORY UNAVAILABLE ${timeline}\n`);
+    }
     assert.match(await page.locator('#order-cause').textContent(), /^(UNKNOWN|OrderExpired)$/);
     assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
     await page.locator('#refresh').click();

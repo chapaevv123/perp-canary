@@ -1,0 +1,13 @@
+# M7.4 final report — 2026-10-28
+
+M7.4 resumes the interrupted working tree from M7.3 `1f2cc67`. Existing typography, account summary, position table, Guard display and chart edits were retained. The remaining work fixed Guard state sync after programmatic price shortcuts, removed a stale local market-state dependency, tightened review-button eligibility, expanded Chromium acceptance coverage, and captured screenshots.
+
+PostOnly behavior: BUY permits a fresh trusted Best Bid; SELL permits a fresh trusted Best Ask. The opposite shortcut is disabled with a crossing explanation. Tick, lot, mark deviation, freshness and server preflight still apply. No order was sent or signed during M7.4.
+
+Guard distinguishes NOT READY, READY FOR REVIEW, CHECKING, SAFE, CAUTION, BLOCKED and UNAVAILABLE. READY FOR REVIEW is only input readiness. Wallet confirmation requires a new fresh account, market, margin, gas and simulation preflight. The current owner position is a live account read when available; historical Execution Replay attributes only its verified 0.00013 BTC increment.
+
+Verification: `npm.cmd run lint` PASS; `npm.cmd run typecheck` PASS; `npm.cmd test` 178 passed; `npm.cmd run test:ui` 15 passed, 0 failed, 1 optional live skipped; `npm.cmd run build` PASS. The normal UI suite uses Chromium with mocked wallet and market responses. Screenshots: [desktop](screenshots/m74-terminal-desktop.png), [ticket](screenshots/m74-trade-ticket.png), [position table](screenshots/m74-position-table.png). All three are from browser fixtures.
+
+Separate live read-only check: the first run inside the restricted network sandbox could not reach Hideki (`EACCES`). An approved direct Node `eth_chainId` probe then returned HTTP 200 and `0xc4cf` (50383). A real Chromium run outside that sandbox showed `TRUSTED` BTC book, live RPC, WebSocket, indexer and pool health, and an owner account snapshot at block 35254533. The optional live smoke **did not pass**: historical `/api/v1/terminal/history` did not resolve to `NOT_OPEN_AT_READ` within its original 90-second wait; later diagnostics showed `UNKNOWN` while the independent live book and account still worked. A shorter diagnostic run also timed out waiting for the historical timeline to finish. Treat the historical lifecycle as unverified for this M7.4 session. No live wallet submission, signature or position change was attempted.
+
+Public release still requires a trusted HTTPS domain, owner approval for deployment, a public-mode smoke on that domain, and investigation of the slow/unavailable historical owner timeline in live conditions. Guaranteed reduce-only close remains unsupported. No push or deployment occurred.

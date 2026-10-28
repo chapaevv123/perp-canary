@@ -60,6 +60,20 @@
     return book?.status === 'TRUSTED' && !!book.observedAt &&
       Date.now() >= Date.parse(book.observedAt) && Date.now() - Date.parse(book.observedAt) <= 30000;
   }
+  function updatePriceShortcuts() {
+    const trusted = trustedBook();
+    $('use-bid').disabled = !trusted || state.side !== 'BUY';
+    $('use-ask').disabled = !trusted || state.side !== 'SELL';
+    $('use-bid').title = !trusted ? 'A fresh trusted book is required.' :
+      state.side === 'SELL' ? 'A SELL PostOnly order at the bid would cross the spread.' :
+        'Use the trusted best bid as a maker limit price.';
+    $('use-ask').title = !trusted ? 'A fresh trusted book is required.' :
+      state.side === 'BUY' ? 'A BUY PostOnly order at the ask would cross the spread.' :
+        'Use the trusted best ask as a maker limit price.';
+    document.querySelector('.control-note').textContent = !trusted ?
+      'Price shortcuts require a fresh trusted book. PostOnly orders must not cross the spread.' :
+      `PostOnly orders must not cross the spread. ${state.side === 'BUY' ? 'Best Ask' : 'Best Bid'} is disabled for ${state.side}.`;
+  }
   function drawChart() {
     const points = state.observations;
     set('chart-count', `${points.length} observed quote${points.length === 1 ? '' : 's'}`);
@@ -169,7 +183,7 @@
     $('book-badge').className = `badge ${stale ? 'amber' : 'red'}`; set('book-badge', stale ? 'STALE' : 'UNTRUSTED');
     if (stale) { set('rpc-pill', 'RPC · STALE SNAPSHOT'); $('rpc-pill').className = 'pill muted'; }
     $('depth-asks').replaceChildren(); $('depth-bids').replaceChildren();
-    $('use-bid').disabled = true; $('use-ask').disabled = true;
+    updatePriceShortcuts();
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = true; });
     updatePreview();
   }
@@ -194,18 +208,23 @@
     set('book-time', m.book.observedAt ? new Date(m.book.observedAt).toLocaleTimeString() : '—');
     set('book-block', m.book.block); set('book-reasons', m.book.reasons.length ? m.book.reasons.join(' · ') : 'SDK on-chain and direct RPC top of book agree.');
     $('book-badge').className = `badge ${fresh ? 'green' : 'red'}`; set('book-badge', fresh ? 'TRUSTED' : 'UNTRUSTED');
-    const depthRow = (side, level) => {
+    const depthRow = (side, level, maxQuantity) => {
       const div = document.createElement('div'); div.className = `depth-row ${side}`;
+      const fraction = maxQuantity > 0 ? Math.min(100, Math.max(0, Number(level.quantity) / maxQuantity * 100)) : 0;
+      div.style.setProperty('--depth-fill', `${fraction.toFixed(2)}%`);
+      div.title = `Verified ${side} level: ${level.quantity} ${m.marketMeta?.base ?? ''} at ${level.price} USDso`;
       for (const text of [side.toUpperCase(), money(level.price), level.quantity]) {
         const cell = document.createElement('span'); cell.textContent = text; div.append(cell);
       } return div;
     };
+    const maxAsk = Math.max(0, ...(m.depth?.asks ?? []).map(level => Number(level.quantity)));
+    const maxBid = Math.max(0, ...(m.depth?.bids ?? []).map(level => Number(level.quantity)));
     $('depth-asks').replaceChildren(...(fresh && m.depth?.status === 'VERIFIED' ?
-      m.depth.asks.slice(1).reverse().map(level => depthRow('ask', level)) : []));
+      m.depth.asks.slice(1).reverse().map(level => depthRow('ask', level, maxAsk)) : []));
     $('depth-bids').replaceChildren(...(fresh && m.depth?.status === 'VERIFIED' ?
-      m.depth.bids.slice(1).map(level => depthRow('bid', level)) : []));
+      m.depth.bids.slice(1).map(level => depthRow('bid', level, maxBid)) : []));
     if (fresh && m.depth?.status !== 'VERIFIED') set('book-reasons', `Trusted top only; deeper levels unavailable: ${m.depth?.reason || 'UNKNOWN'}`);
-    $('use-bid').disabled = !fresh || state.side !== 'BUY'; $('use-ask').disabled = !fresh || state.side !== 'SELL';
+    updatePriceShortcuts();
     document.querySelectorAll('[data-offset]').forEach(button => { button.disabled = !fresh; });
     const markTime = Date.parse(m.observedAt);
     const credibleMark = fresh && m.chainId === 50383 && m.market === $('market-select').value &&
@@ -332,8 +351,7 @@
     $('buy').classList.toggle('selected', side === 'BUY'); $('sell').classList.toggle('selected', side === 'SELL');
     $('buy').setAttribute('aria-pressed', String(side === 'BUY'));
     $('sell').setAttribute('aria-pressed', String(side === 'SELL'));
-    $('use-bid').disabled = !trustedBook() || side !== 'BUY';
-    $('use-ask').disabled = !trustedBook() || side !== 'SELL';
+    updatePriceShortcuts();
     document.querySelector('.offset-label').textContent = `${side} OFFSET FROM BEST ${side === 'BUY' ? 'BID' : 'ASK'}`;
     document.querySelectorAll('[data-offset]').forEach(button => {
       button.textContent = `${side === 'BUY' ? '−' : '+'}${button.dataset.offset} bps`;
@@ -344,9 +362,12 @@
   $('sell').disabled = false;
   $('sell').onclick = () => { selectSide('SELL'); $('quantity').focus(); };
   $('quantity').oninput = updatePreview; $('limit-price').oninput = updatePreview;
-  $('use-bid').onclick = () => { if (trustedBook()) { $('limit-price').value = state.market.book.bid; updatePreview(); } };
+  $('use-bid').onclick = () => { if (trustedBook() && state.side === 'BUY') {
+    $('limit-price').value = state.market.book.bid; updatePreview();
+    $('limit-price').dispatchEvent(new Event('input', { bubbles: true })); } };
   $('use-ask').onclick = () => { if (trustedBook() && state.side === 'SELL') {
-    $('limit-price').value = state.market.book.ask; updatePreview(); } };
+    $('limit-price').value = state.market.book.ask; updatePreview();
+    $('limit-price').dispatchEvent(new Event('input', { bubbles: true })); } };
   document.querySelectorAll('[data-offset]').forEach(button => { button.onclick = () => {
     if (!trustedBook()) return;
     let top, tick;
