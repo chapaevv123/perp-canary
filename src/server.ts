@@ -43,6 +43,8 @@ import { readSourceHealth } from './source-health.ts';
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
 const legacyHtmlPath = resolve('web/legacy.html');
+const legacyCssPath = resolve('web/legacy.css');
+const legacyJsPath = resolve('web/legacy.js');
 const terminalCssPath = resolve('web/terminal.css');
 const terminalJsPath = resolve('web/terminal.js');
 const tradingJsPath = resolve('web/trading.js');
@@ -441,6 +443,12 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/legacy') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(legacyHtmlPath));
+    } else if (request.method === 'GET' && path === '/legacy.css') {
+      response.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(legacyCssPath));
+    } else if (request.method === 'GET' && path === '/legacy.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(legacyJsPath));
     } else if (request.method === 'GET' && path === '/wallet.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(walletJsPath));

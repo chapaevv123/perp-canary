@@ -1142,6 +1142,178 @@ test('local source health route rejects invalid market input before network acce
   assert.deepEqual(await response.json(), { error: 'Invalid perp market symbol' });
 });
 
+test('M11 remaining public controls: navigation, Guard, replay, alerts and sizing', async () => {
+  const { context, page, errors } = await fixturePage();
+  let sizingDraft;
+  try {
+    assert.equal(await page.locator('.brand').getAttribute('href'), '/');
+    await page.locator('.brand').click();
+    assert.equal(new URL(page.url()).pathname, '/');
+    await page.getByRole('navigation', { name: 'Terminal sections' }).getByText('Market').click();
+    assert.equal(new URL(page.url()).hash, '#market');
+    const legacy = await context.newPage();
+    await legacy.goto(`${base}/legacy`);
+    assert.match(await legacy.title(), /Perp Canary/);
+    await legacy.close();
+    assert.equal(await page.locator('.owner-only-link').first().getAttribute('href'), '/legacy');
+    assert.equal(await page.locator('footer .owner-only-link').getAttribute('href'), '/legacy');
+    await page.locator('.owner-only-link').first().click();
+    assert.equal(new URL(page.url()).pathname, '/legacy');
+    await page.goto(base);
+    await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor();
+    await page.locator('footer .owner-only-link').click();
+    assert.equal(new URL(page.url()).pathname, '/legacy');
+    await page.goto(base);
+    await page.locator('#book-badge').getByText('TRUSTED', { exact: true }).waitFor();
+    await page.locator('.replay-trigger').click();
+    assert.equal(await page.locator('.execution-replay').isVisible(), true);
+    await page.locator('#replay-close').click();
+    const sourceDetails = page.locator('.source-health details').first();
+    await sourceDetails.locator('summary').click();
+    assert.equal(await sourceDetails.evaluate(node => node.open), true);
+    await sourceDetails.locator('summary').click();
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#use-bid').click();
+    await page.locator('#guard-spread').selectOption('50');
+    assert.equal(await page.locator('#guard-spread').inputValue(), '50');
+    await page.locator('#guard-check-details summary').click();
+    assert.equal(await page.locator('#guard-check-details').evaluate(node => node.open), true);
+    await page.locator('#account-tab-button-trades').click();
+    assert.equal(await page.locator('#account-tab-button-trades').getAttribute('aria-selected'), 'true');
+    await page.locator('#account-tab-button-replay').click();
+    await page.locator('#account-open-replay').click();
+    assert.equal(await page.locator('.execution-replay').isVisible(), true);
+    await page.locator('#replay-close').click();
+    await page.locator('#account-tab-button-positions').click();
+    await page.locator('.position-advanced summary').click();
+    assert.equal(await page.locator('.position-advanced').evaluate(node => node.open), true);
+    await page.locator('#refresh-position-intelligence').click();
+    assert.match(await page.locator('#position-intelligence-status').textContent(), /Connect on Somnia Hideki/);
+    assert.equal(await page.locator('#scenario-slider').isDisabled(), true);
+    await page.locator('#workspace-plan').click();
+    if (!(await page.locator('.account-tools').evaluate(node => node.open)))
+      await page.locator('.account-tools summary').click();
+    await page.locator('#size-absolute-risk').fill('25');
+    assert.equal(await page.locator('#size-absolute-risk').inputValue(), '25');
+    await page.route('**/api/v1/intelligence/size', route => {
+      sizingDraft = route.request().postDataJSON();
+      route.fulfill({ json: { confidence: 'ESTIMATED', status: 'CALCULATED',
+        quantity: '0.00124', riskBudgetUsdso: '25', notionalUsdso: '98.959564',
+        initialMarginUsdso: '4.9479782', invalidationDistancePercent: '1.01',
+        lossAtStopUsdso: '25', assumptions: 'Stop is a reference only, not an installed order.' } });
+    });
+    await page.locator('#size-capital').fill('100');
+    await page.locator('#size-risk').fill('1');
+    await page.locator('#size-stop').fill('79000');
+    await page.locator('#calculate-size').click();
+    await page.locator('#size-result').getByText(/0\.00124 BTC/).waitFor();
+    assert.equal(sizingDraft.absoluteRiskUsdso, '25');
+    await page.locator('#workspace-alerts').click();
+    await page.locator('#alert-market').selectOption('BTC-PERP');
+    await page.locator('#alert-type').selectOption('PRICE_ABOVE');
+    await page.locator('#alert-threshold').fill('79900');
+    await page.locator('#alert-save').click();
+    await page.locator('.product-alert button').getByText('Edit').click();
+    assert.equal(await page.locator('#alert-cancel-edit').isVisible(), true);
+    await page.locator('#alert-cancel-edit').click();
+    assert.equal(await page.locator('#alert-cancel-edit').isHidden(), true);
+    assert.equal(await page.locator('#alert-save').textContent(), 'Create alert');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('M11 remaining wallet panel controls use read-only provider and cancel review', async () => {
+  const account = '0x1111111111111111111111111111111111111111';
+  const { context, page, errors } = await fixturePage(() => {
+    const account = '0x1111111111111111111111111111111111111111';
+    window.__readOnlyMethods = [];
+    window.ethereum = { isMetaMask: true, on() {}, removeListener() {},
+      async request({ method }) {
+        window.__readOnlyMethods.push(method);
+        if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [account];
+        if (method === 'eth_chainId') return '0xc4cf';
+        throw Error(`Forbidden wallet method: ${method}`);
+      } };
+  });
+  let fundingReads = 0;
+  try {
+    await page.route('**/api/v1/position/intelligence?**', route => route.fulfill({ json: {
+      source: 'MOCKED', block: '123', observedAt: new Date().toISOString(),
+      availableMarginUsdso: '50', direction: 'LONG', size: '0.01', entryPrice: '79000',
+      markPrice: '79800', unrealizedPnlUsdso: '8', accruedFundingOwedUsdso: '0',
+      liquidationPrice: null, liquidationReason: 'No estimate', realizedPnlReason: 'Unavailable',
+      scenarioInputs: { sizeRaw: '10000000000000000', entryRaw: '79000000000000000000000',
+        markRaw: '79800000000000000000000', baseDecimals: 18 } } }));
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: {
+      account, market: 'BTC-PERP', block: '123', gasStt: '1', walletUsdso: '0',
+      allowance: '0', marginUnlocked: '50', withdrawable: '0',
+      position: { size: '0', entryPrice: '0' }, openOrders: [] } }));
+    await page.route('**/api/v1/wallet/funding?**', route => {
+      fundingReads++;
+      route.fulfill({ json: { account, chainId: 50383, block: '123', nativeStt: '1',
+        nativeSttWei: '1000000000000000000', walletUsdso: '0', marginFreeUsdso: '50',
+        marginWithdrawableUsdso: '0', voucher: { claimed: false, floorUsdso: '0' },
+        btcVoucherAllowed: true, eligibility: { eligible: true, grantUsdso: '1000' } } });
+    });
+    await page.route('**/api/v1/wallet/voucher/prepare', route => route.fulfill({ json: {
+      status: 'READY_FOR_OWNER_CONFIRMATION', account, grantUsdso: '1000',
+      transaction: { chainId: 50383, from: account, to: account, data: '0x', value: '0x0' } } }));
+    await page.locator('#wallet-connect').click();
+    await page.locator('#wallet-identity').click();
+    await page.locator('#wallet-full-address').getByText(account).waitFor();
+    assert.equal(await page.locator('#wallet-copy-address').isEnabled(), true);
+    await page.locator('#wallet-copy-address').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), account);
+    await page.locator('#wallet-panel-refresh').click();
+    await page.waitForFunction(() => document.getElementById('wallet-native-stt').textContent.includes('1 STT'));
+    assert.ok(fundingReads >= 2);
+    await page.locator('#account-tab-button-positions').click();
+    if (!(await page.locator('.position-advanced').evaluate(node => node.open)))
+      await page.locator('.position-advanced summary').click();
+    await page.locator('#refresh-position-intelligence').click();
+    await page.locator('#scenario-slider').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#scenario-slider').isEnabled(), true);
+    await page.locator('#scenario-slider').focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator('#scenario-percent').textContent(), '+1%');
+    assert.match(await page.locator('#scenario-result').textContent(), /estimated position PnL/);
+    await page.locator('#check-voucher').click();
+    await page.locator('#voucher-eligibility').getByText(/ELIGIBLE/).waitFor();
+    await page.locator('#review-voucher').click();
+    await page.locator('#voucher-review').waitFor();
+    await page.locator('#dismiss-voucher').click();
+    assert.equal(await page.locator('#voucher-review').isHidden(), true);
+    await page.locator('#wallet-details-close').click();
+    assert.equal(await page.locator('#wallet-details').isHidden(), true);
+    await page.route('**/api/v1/trade/prepare', route => route.fulfill({ json: {
+      status: 'READY', guard: { verdict: 'GREEN', blockers: [], warnings: [],
+        notionalRaw: '10374793000000000000' },
+      observation: { chainId: 50383, observedAt: new Date().toISOString(), block: '123',
+        account: { address: account }, book: { status: 'TRUSTED', bid: '79806.1',
+          ask: '79806.3', block: '123' } },
+      marginPreview: { sufficient: true, lockUsdso: '10', asOfBlock: '123' },
+      transaction: { chainId: 50383, from: account, to: account, data: '0x4e978373',
+        value: '0x0', gas: '0x5208', nonce: 0,
+        expiresAt: new Date(Date.now() + 280000).toISOString(), maxGasCostStt: '0.001' } } }));
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#use-bid').click();
+    await page.locator('#review-order').click();
+    await page.locator('#trade-review').waitFor();
+    await page.locator('#guard-spread').selectOption('50');
+    assert.match(await page.locator('#guard-checks').textContent(), /Soft caution above 50 bps/);
+    await page.locator('#dismiss-review').click();
+    assert.equal(await page.locator('#trade-review').isHidden(), true);
+    assert.match(await page.locator('#wallet-result').textContent(), /Order review closed/);
+    await page.locator('#wallet-identity').click();
+    await page.locator('#wallet-panel-disconnect').click();
+    assert.equal(await page.locator('#wallet-details').isHidden(), true);
+    assert.equal(await page.locator('#wallet-connect').isVisible(), true);
+    assert.deepEqual(await page.evaluate(() => window.__readOnlyMethods.filter(method =>
+      method !== 'eth_accounts' && method !== 'eth_requestAccounts' && method !== 'eth_chainId')), []);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1' }, async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
