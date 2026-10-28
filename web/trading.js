@@ -19,7 +19,7 @@ import { explainGuard } from './guard-v2.js';
   panel.querySelector('.trade-callout strong').textContent = 'Every order requires your wallet confirmation.';
   panel.querySelector('.trade-callout span').textContent =
     'Perp Canary prepares and simulates a direct pool call. Your connected wallet signs and sends it only after review.';
-  document.querySelector('.chart-panel .eyebrow').textContent = 'LIVE MARK TRACE · THIS SESSION';
+  document.querySelector('.chart-panel .eyebrow').textContent = 'REAL MARKET HISTORY · SDK INDEXER';
   $('bot-pill').textContent = 'POOL · CHECKING';
   const feeFacts = document.createElement('div'); feeFacts.innerHTML =
     '<span>Builder fee</span><strong>0 bps in calldata</strong>';
@@ -100,11 +100,62 @@ import { explainGuard } from './guard-v2.js';
   for (const selector of ['.account-mode', '.mode-explanation', '.wallet-summary'])
     panel.querySelector('.side-switch').before(workflow.querySelector(selector));
   const accountDesk = document.createElement('section');
-  accountDesk.className = 'account-desk'; accountDesk.setAttribute('aria-label', 'Account and trading intelligence');
-  for (const selector of ['.wallet-position', '.wallet-actions', '.radar-card', '.sizing-card', '.wallet-journal']) {
-    const element = workflow.querySelector(selector);
-    if (element) accountDesk.append(element);
+  accountDesk.className = 'account-desk'; accountDesk.setAttribute('aria-label', 'Account workspace');
+  const walletOrders = workflow.querySelector('#wallet-orders');
+  const tabs = document.createElement('div'); tabs.className = 'account-tabs';
+  tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Account workspace sections');
+  const panes = [
+    ['positions', 'Positions', workflow.querySelector('.wallet-position')],
+    ['orders', 'Open Orders', document.createElement('section')],
+    ['history', 'Order History', document.createElement('section')],
+    ['trades', 'Trade History', document.createElement('section')],
+    ['balances', 'Balances / Margin', workflow.querySelector('.wallet-actions')],
+    ['replay', 'Execution Replay', document.createElement('section')],
+  ];
+  const byName = new Map();
+  for (const [name, label, pane] of panes) {
+    pane.id = `account-tab-${name}`; pane.classList.add('account-tab-panel');
+    pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', `account-tab-button-${name}`);
+    const button = document.createElement('button'); button.id = `account-tab-button-${name}`;
+    button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-controls', pane.id);
+    button.textContent = label; tabs.append(button); accountDesk.append(pane); byName.set(name, { button, pane });
   }
+  function activateTab(name, focus = false) {
+    for (const [key, { button, pane }] of byName) {
+      const active = key === name;
+      button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1;
+      pane.hidden = !active;
+    }
+    if (focus) byName.get(name)?.button.focus();
+  }
+  for (const [name, { button }] of byName) button.onclick = () => activateTab(name);
+  tabs.onkeydown = event => {
+    const keys = [...byName.keys()], current = keys.findIndex(name => byName.get(name).button === document.activeElement);
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault(); activateTab(keys[(current + (event.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length], true);
+    } else if (event.key === 'Home') { event.preventDefault(); activateTab(keys[0], true); }
+    else if (event.key === 'End') { event.preventDefault(); activateTab(keys.at(-1), true); }
+  };
+  accountDesk.prepend(tabs);
+  const ordersPane = byName.get('orders').pane;
+  ordersPane.innerHTML = '<h3>Live open orders</h3><p>Only orders on the selected account and market are shown. Cancel requires a separate fresh review and wallet confirmation.</p>';
+  ordersPane.append(walletOrders);
+  const journal = workflow.querySelector('.wallet-journal');
+  const historyPane = byName.get('history').pane;
+  historyPane.innerHTML = '<h3>Finished orders · SDK indexer</h3><p>Indexer history can lag the current on-chain order state.</p>';
+  for (const id of ['load-order-history', 'history-status', 'history-rows', 'verified-trade-note']) historyPane.append($(id));
+  const tradesPane = byName.get('trades').pane;
+  tradesPane.innerHTML = '<h3>Browser transaction references</h3><p>Receipts and current order status are separate facts. This list records only transactions initiated by this browser session.</p>';
+  for (const id of ['trade-review-summary', 'journal-entries']) tradesPane.append($(id));
+  journal.remove();
+  const replayPane = byName.get('replay').pane;
+  replayPane.innerHTML = '<h3>Verified historical BTC execution</h3><p>Order #14978756187852164141712 placed and fully filled. Only its 0.00013 BTC increment is attributed to this execution; no historical preflight was recorded.</p><button id="account-open-replay" type="button" class="button secondary">Open verified replay</button>';
+  replayPane.querySelector('#account-open-replay').onclick = () => document.querySelector('.replay-trigger')?.click();
+  const tools = document.createElement('details'); tools.className = 'account-tools';
+  tools.innerHTML = '<summary>Canary Radar and position sizing</summary>';
+  tools.append(workflow.querySelector('.radar-card'), workflow.querySelector('.sizing-card'));
+  accountDesk.append(tools);
+  activateTab('positions');
   const mainGrid = document.querySelector('.main-grid');
   mainGrid.append(accountDesk);
   const diagnostics = document.createElement('section');
@@ -117,6 +168,8 @@ import { explainGuard } from './guard-v2.js';
   const actionStatus = (message, kind = '') => { $('action-result').textContent = message;
     $('action-result').dataset.kind = kind; };
   const text = (id, value) => { $(id).textContent = value; };
+  const displayNumber = (value, digits = 6) => value == null || value === '' ? 'Unavailable' : Number.isFinite(Number(value)) ?
+    Number(value).toLocaleString('en-US', { maximumFractionDigits: digits }) : String(value);
   function renderGuardV2(plan, draft) {
     const report = explainGuard(plan, draft, Number($('guard-spread').value));
     text('guard-decision', report.decision);
@@ -128,6 +181,7 @@ import { explainGuard } from './guard-v2.js';
       const rule = document.createElement('small'); rule.textContent = `${check.rule} · block ${check.freshness}`;
       row.append(name, detail, rule); return row;
     }));
+    return report;
   }
   $('guard-spread').onchange = () => { if (state.plan) renderGuardV2(state.plan.result, state.plan.input); };
   const validChain = () => state.chainId === 50383;
@@ -193,7 +247,7 @@ import { explainGuard } from './guard-v2.js';
     if (!state.positionMetrics?.scenarioInputs) return;
     try {
       const result = priceScenario(state.positionMetrics.scenarioInputs, percent);
-      text('scenario-result', `At ${result.targetPrice} USDso: estimated position PnL ${result.estimatedPnlUsdso} USDso. Price-only scenario, not an execution or liquidation forecast.`);
+      text('scenario-result', `At approximately ${displayNumber(result.targetPrice, 4)} USDso: estimated position PnL ${displayNumber(result.estimatedPnlUsdso)} USDso. Price-only scenario, not an execution or liquidation forecast.`);
     } catch (error) { text('scenario-result', error.message); }
   }
   async function loadPositionIntelligence() {
@@ -206,12 +260,12 @@ import { explainGuard } from './guard-v2.js';
       if (id !== state.positionRequestId || account !== state.account || mode !== state.mode ||
         market !== $('market-select').value) return;
       state.positionMetrics = data;
-      text('position-intelligence-status', `${data.source} · block ${data.block} · ${new Date(data.observedAt).toLocaleTimeString()}. Free margin ${data.availableMarginUsdso} USDso.`);
-      text('metric-direction', `${data.direction} ${data.size} ${market.replace('-PERP', '')}`);
-      text('metric-prices', data.entryPrice && data.markPrice ? `${data.entryPrice} / ${data.markPrice} USDso` : 'Unavailable: no priced position');
-      text('metric-upnl', data.unrealizedPnlUsdso === null ? `Unavailable: ${data.metricsReason ?? 'no position'}` : `${data.unrealizedPnlUsdso} USDso`);
-      text('metric-funding', data.accruedFundingOwedUsdso === null ? 'Unavailable' : `${data.accruedFundingOwedUsdso} USDso owed since entry`);
-      text('metric-liquidation', data.liquidationPrice === null ? `Unavailable: ${data.liquidationReason}` : `${data.liquidationPrice} USDso · one-market estimate`);
+      text('position-intelligence-status', `${data.source} · block ${data.block} · ${new Date(data.observedAt).toLocaleTimeString()}. Free margin ${displayNumber(data.availableMarginUsdso)} USDso (display rounded).`);
+      text('metric-direction', `${data.direction} ${displayNumber(data.size, 8)} ${market.replace('-PERP', '')}`);
+      text('metric-prices', data.entryPrice && data.markPrice ? `${displayNumber(data.entryPrice, 4)} / ${displayNumber(data.markPrice, 4)} USDso` : 'Unavailable: no priced position');
+      text('metric-upnl', data.unrealizedPnlUsdso === null ? `Unavailable: ${data.metricsReason ?? 'no position'}` : `${displayNumber(data.unrealizedPnlUsdso)} USDso`);
+      text('metric-funding', data.accruedFundingOwedUsdso === null ? 'Unavailable' : `${displayNumber(data.accruedFundingOwedUsdso)} USDso owed since entry`);
+      text('metric-liquidation', data.liquidationPrice === null ? `Unavailable: ${data.liquidationReason}` : `${displayNumber(data.liquidationPrice, 4)} USDso · one-market estimate`);
       text('metric-realized', `Unavailable: ${data.realizedPnlReason}`);
       $('scenario-slider').disabled = !data.scenarioInputs;
       renderScenario();
@@ -351,7 +405,7 @@ import { explainGuard } from './guard-v2.js';
       text('wallet-permissions', delegated() ?
         `Pool grants: place ${data.permissions.place ? 'ACTIVE' : 'BLOCKED'} · cancel ${data.permissions.cancel ? 'ACTIVE' : 'BLOCKED'} · reduce ${data.permissions.reduce ? 'ACTIVE' : 'BLOCKED'}. Scope: ${data.permissions.scope}` :
         'Direct EOA: no delegated grant required. Wallet confirmation required for each action.');
-      text('wallet-position', `Position ${data.position.size ?? data.position.sizeBtc} ${data.market?.replace('-PERP', '') ?? 'BTC'} · entry ${data.position.entryPrice} USDso · ${data.openOrders.length} open orders (block ${data.block})`);
+      text('wallet-position', `Position ${displayNumber(data.position.size ?? data.position.sizeBtc, 8)} ${data.market?.replace('-PERP', '') ?? 'BTC'} · entry ${displayNumber(data.position.entryPrice, 4)} USDso · ${data.openOrders.length} open orders (block ${data.block})`);
       const rows = data.openOrders.map(order => {
         const row = document.createElement('div'); row.className = 'wallet-order-row';
         const detail = document.createElement('span');
@@ -360,7 +414,7 @@ import { explainGuard } from './guard-v2.js';
         cancel.textContent = 'Review cancel'; cancel.onclick = () => {
           $('wallet-action').value = 'CANCEL'; $('action-order-id').value = order.id;
           $('action-order-label').hidden = false; $('action-amount').parentElement.hidden = true;
-          invalidateAction(); $('review-action').focus();
+          invalidateAction(); activateTab('balances'); $('review-action').focus();
         };
         row.append(detail, cancel);
         return row;
@@ -423,17 +477,20 @@ import { explainGuard } from './guard-v2.js';
     status('Loading verified markets (timeout 60 seconds)…', 'warn');
     try { const result = await request('/api/v1/markets');
       const markets = result.markets;
-      if (!Array.isArray(markets) || !markets.some(row => row.symbol === 'BTC-PERP')) throw Error('BTC market missing');
+      if (!Array.isArray(markets) || !markets.length || markets.some(row => row.marketType !== 'PERP'))
+        throw Error('Verified perp registry is unavailable');
       state.marketRegistry = markets;
+      window.__canaryMarkets = markets;
       const previous = $('market-select').value;
       const options = markets.sort((a, b) => a.symbol === 'BTC-PERP' ? -1 : b.symbol === 'BTC-PERP' ? 1 :
         a.symbol.localeCompare(b.symbol)).map(row => {
         const option = document.createElement('option'); option.value = row.symbol;
         option.textContent = `${row.symbol} / ${row.quote}${row.status === 'TRADEABLE' ? '' : ` (${row.status})`}`;
-        option.disabled = row.status !== 'TRADEABLE'; return option;
+        option.dataset.poolStatus = row.status; return option;
       });
       $('market-select').replaceChildren(...options);
-      if (options.some(option => option.value === previous && !option.disabled)) $('market-select').value = previous;
+      if (options.some(option => option.value === previous)) $('market-select').value = previous;
+      window.dispatchEvent(new window.CustomEvent('canary:markets', { detail: markets }));
       status(`${markets.filter(row => row.status === 'TRADEABLE').length} markets passed SDK and factory status checks.`, 'ok');
     } catch (error) { status(`Market registry unavailable: ${error.message}. Click Refresh live data to retry.`, 'warn'); }
   }
@@ -617,7 +674,9 @@ import { explainGuard } from './guard-v2.js';
     state.sizedQuantity = null; $('use-sized-quantity').disabled = true;
   });
   $('market-select').onchange = () => { state.accountData = null; state.requestId++; invalidate();
-    state.historyRequestId++; $('history-rows').replaceChildren();
+    state.historyRequestId++; state.positionRequestId++; state.positionMetrics = null;
+    clearPositionIntelligence('Reading the selected market position…');
+    $('history-rows').replaceChildren();
     text('history-status', 'History not requested for this market.');
     panel.querySelector('h2').textContent = `Trade ${$('market-select').value}`;
     $('trade-review').querySelector('h3').textContent = `Review ${delegated() ? 'delegated' : 'direct'} ${$('market-select').value} order`;
@@ -765,12 +824,13 @@ import { explainGuard } from './guard-v2.js';
         draft.quantity !== $('quantity').value.trim()) throw Error('Wallet or order changed during review. Start again.');
       text('guard-verdict', plan.guard.verdict);
       $('guard-verdict').dataset.verdict = plan.guard.verdict;
-      renderGuardV2(plan, draft);
+      const guardView = renderGuardV2(plan, draft);
       text('margin-preview', plan.marginPreview?.status === 'OK' ?
         `${plan.marginPreview.lockUsdso} USDso lock · ${plan.marginPreview.initialRequirementUsdso} USDso initial requirement` :
         plan.marginPreview ? 'UNPRICEABLE' : 'NOT_RUN');
       text('gas-estimate', plan.transaction ? `${plan.transaction.maxGasCostStt} STT maximum at observed gas price` : 'NOT_RUN');
-      if (plan.status !== 'READY' || !plan.transaction) { status('Order blocked by Canary Trade Guard.', 'error'); return; }
+      if (plan.status !== 'READY' || !plan.transaction || guardView.decision === 'BLOCKED' ||
+        guardView.decision === 'UNAVAILABLE') { status('Order blocked by Canary Trade Guard.', 'error'); return; }
       state.plan = { input: draft, result: plan };
       text('review-details', `${delegated() ? `Wallet 1 ${embeddedAccount} via operator ${draft.account}` : `Direct EOA ${draft.account}`} · ${draft.side} ${draft.quantity} ${draft.market} @ ${draft.price} USDso · PostOnly · estimated notional ${
         (Number(plan.guard.notionalRaw) / 1e18).toFixed(2)} USDso`);
@@ -812,6 +872,9 @@ import { explainGuard } from './guard-v2.js';
         $('preflight-details').hidden = false;
         status(`Wallet trade stopped: ${reasons[0]}`, 'error'); return;
       }
+      const freshGuard = explainGuard(fresh, reviewed.input);
+      if (freshGuard.decision === 'BLOCKED' || freshGuard.decision === 'UNAVAILABLE')
+        throw Error(`Fresh Canary Guard: ${freshGuard.decision}. ${freshGuard.nextAction}`);
       text('preflight-details', `${verdict.changes.map(change => change.reason).join(' ')} ${details}`);
       $('preflight-details').hidden = false;
       status('Fresh Trade Guard and simulation passed. Waiting for your explicit wallet confirmation…', 'warn');

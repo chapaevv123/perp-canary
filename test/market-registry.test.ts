@@ -6,7 +6,7 @@ import { validateRegistryRow } from '../src/market-registry.ts';
 const pool = '0xd6cb1dd58580b84d76068ac21594219ce03aeddf';
 const bank = '0x478769E1177C0773c43A593DCCc4Ad15F15F1394';
 const collateral = '0xed7993A74dAe1e6656B704A424DcD8711aAf4F72';
-const row = { id: pool, poolAddress: pool, marginBank: bank, quoteToken: collateral,
+const row = { id: pool, marketType: 'PERP', poolAddress: pool, marginBank: bank, quoteToken: collateral,
   baseSymbol: 'ETH', quoteSymbol: 'USDso', baseDecimals: 18, quoteDecimals: 18,
   tickSize: '10000000000000000', lotSize: '100000000000000',
   minQuantity: '4000000000000000', initialMarginBps: 500 } as unknown as PerpMarket;

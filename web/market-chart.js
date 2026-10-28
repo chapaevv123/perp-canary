@@ -19,6 +19,7 @@
   function reset() {
     state.candles = []; state.hover = -1; state.chartAt = 0; state.tapeAt = 0;
     state.chartRequest++; state.tapeRequest++; canvas.hidden = true; original.hidden = false;
+    panel.querySelector('h2').textContent = `${state.symbol} live mark trace`;
     empty.hidden = false; document.getElementById('candle-status').textContent = 'Loading real fill-derived history…';
     document.getElementById('tape-status').textContent = 'Loading indexed fills…';
     document.getElementById('tape-rows').replaceChildren();
@@ -52,6 +53,11 @@
       ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(width - right + 5, yy); ctx.stroke();
       ctx.fillText((high - span * i / 4).toLocaleString('en-US', { maximumFractionDigits: 2 }), width - right + 10, yy + 4);
     }
+    const lastPrice = Number(rows.at(-1).close), lastY = y(lastPrice);
+    ctx.strokeStyle = '#b29cff'; ctx.setLineDash([4, 4]); ctx.beginPath();
+    ctx.moveTo(left, lastY); ctx.lineTo(width - right, lastY); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#b29cff'; ctx.fillText(lastPrice.toLocaleString('en-US', { maximumSignificantDigits: 8 }),
+      width - right + 8, Math.max(13, Math.min(height - bottom, lastY + 4)));
     const slot = plotWidth / rows.length, candleWidth = Math.max(2, Math.min(10, slot * 0.65));
     const maxVolume = Math.max(...rows.map(row => Number(row.volumeBase)), 0.000001);
     rows.forEach((row, i) => {

@@ -38,6 +38,7 @@ import { OrderNotOpenError, prepareDelegatedCancel, prepareDelegatedTrade, readA
 import { readMarketCandles, readMarketTrades } from './market-history.ts';
 import { readPositionIntelligence } from './position-intelligence.ts';
 import { readExecutionReplay } from './execution-replay.ts';
+import { readSourceHealth } from './source-health.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -50,6 +51,8 @@ const positionScenarioPath = resolve('web/position-scenario.js');
 const marketChartPath = resolve('web/market-chart.js');
 const executionReplayPath = resolve('web/execution-replay.js');
 const guardV2Path = resolve('web/guard-v2.js');
+const sourceHealthPath = resolve('web/source-health.js');
+const marketSelectorPath = resolve('web/market-selector.js');
 const canaryMarkPath = resolve('web/canary-mark.svg');
 const walletJsPath = resolve('web/wallet.js');
 const fundingJsPath = resolve('web/funding.js');
@@ -109,7 +112,12 @@ createServer(async (request, response) => {
         response.setHeader('retry-after', '60'); json(response, 429, { error: 'Request rate limit reached; retry in one minute' }); return;
       }
     }
-    if (request.method === 'GET' && path === '/api/v1/terminal/proof') {
+    if (request.method === 'GET' && path === '/api/v1/health/sources') {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
+      const symbol = params.get('market') ?? 'BTC-PERP';
+      if (!/^[A-Z0-9]{2,16}-PERP$/.test(symbol)) json(response, 400, { error: 'Invalid perp market symbol' });
+      else json(response, 200, await readSourceHealth(symbol));
+    } else if (request.method === 'GET' && path === '/api/v1/terminal/proof') {
       json(response, 200, publicProof(await readFirstProof()));
     } else if (request.method === 'GET' && path === '/api/v1/execution/replay') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
@@ -247,6 +255,12 @@ createServer(async (request, response) => {
     } else if (request.method === 'GET' && path === '/guard-v2.js') {
       response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       response.end(await readFile(guardV2Path));
+    } else if (request.method === 'GET' && path === '/source-health.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(sourceHealthPath));
+    } else if (request.method === 'GET' && path === '/market-selector.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(await readFile(marketSelectorPath));
     } else if (request.method === 'GET' && path === '/canary-mark.svg') {
       response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       response.end(await readFile(canaryMarkPath));

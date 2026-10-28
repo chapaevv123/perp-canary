@@ -15,6 +15,7 @@ export function localRequestRejection(input: { host?: string; origin?: string; f
 const PUBLIC_GET = new Set([
   '/', '/index.html', '/terminal.css', '/terminal.js', '/trading.js', '/preflight-compare.js',
   '/position-scenario.js', '/market-chart.js', '/execution-replay.js', '/guard-v2.js',
+  '/source-health.js', '/market-selector.js', '/api/v1/health/sources',
   '/canary-mark.svg', '/api/v1/health', '/api/v1/markets', '/api/v1/markets/snapshot',
   '/api/v1/markets/candles', '/api/v1/markets/trades', '/api/v1/trade/account',
   '/api/v1/trade/delegated/account', '/api/v1/trade/history', '/api/v1/trade/receipt',

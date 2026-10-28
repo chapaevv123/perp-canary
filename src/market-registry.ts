@@ -14,6 +14,9 @@ const parametersAbi = parseAbi(['function getOrderBookParameters() view returns 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export type VerifiedMarket = { id: string; symbol: string; pool: Address; marginBank: Address;
+  marketType: 'PERP'; lastIndexedPrice: string | null; lastTradeAt: string | null;
+  openInterestBase: string | null; fundingRateWindowPercent: string | null;
+  fundingUpdatedAt: string | null; maxLeverage: string | null;
   base: string; quote: string; baseDecimals: number; quoteDecimals: number; tickSizeRaw: string;
   lotSizeRaw: string; minQuantityRaw: string; initialMarginBps: number;
   status: 'TRADEABLE' | 'CLOSE_ONLY' | 'UNREGISTERED' | 'UNKNOWN'; source: string;
@@ -30,13 +33,20 @@ async function withSdk<T>(work: (sdk: SomniaMarkets) => Promise<T>): Promise<T> 
 export function validateRegistryRow(row: PerpMarket, status: { pool: string; marginBank: string;
   registered: boolean | null; tradeable: boolean | null; restricted: boolean } | undefined,
   collateral: string): VerifiedMarket {
-  if (!status || !same(row.poolAddress, status.pool) || !same(row.marginBank, status.marginBank) ||
+  if (row.marketType !== 'PERP' || !status || !same(row.poolAddress, status.pool) || !same(row.marginBank, status.marginBank) ||
     !same(row.marginBank, HIDEKI_MARGIN_BANK) || !same(row.quoteToken, COLLATERAL) ||
     !same(collateral, COLLATERAL) || row.quoteDecimals !== 18 ||
     !row.baseSymbol || !row.quoteSymbol || row.baseDecimals < 1 || row.baseDecimals > 36 ||
     BigInt(row.tickSize) <= 0n || BigInt(row.lotSize) <= 0n || BigInt(row.minQuantity) <= 0n)
     throw Error(`Market ${row.id} registry or on-chain wiring mismatch`);
   return { id: row.id, symbol: `${row.baseSymbol}-PERP`, pool: getAddress(row.poolAddress),
+    marketType: 'PERP',
+    lastIndexedPrice: row.lastPrice == null ? null : formatUnits(BigInt(row.lastPrice), row.quoteDecimals),
+    lastTradeAt: row.lastTradeAt ?? null,
+    openInterestBase: row.openInterest == null ? null : formatUnits(BigInt(row.openInterest), row.baseDecimals),
+    fundingRateWindowPercent: row.fundingRate == null ? null : formatUnits(BigInt(row.fundingRate) * 100n, 18),
+    fundingUpdatedAt: row.fundingUpdatedAt ?? null,
+    maxLeverage: row.initialMarginBps > 0 ? (10_000 / row.initialMarginBps).toString() : null,
     marginBank: getAddress(row.marginBank), base: row.baseSymbol, quote: row.quoteSymbol,
     baseDecimals: row.baseDecimals, quoteDecimals: row.quoteDecimals,
     tickSizeRaw: row.tickSize, lotSizeRaw: row.lotSize, minQuantityRaw: row.minQuantity,
@@ -60,6 +70,10 @@ export async function listVerifiedMarkets(fresh = false): Promise<VerifiedMarket
     const markets = rows.map(row => validateRegistryRow(row, byPool.get(row.poolAddress.toLowerCase()), system.collateralToken));
     cached = { until: Date.now() + 60_000, markets };
     return markets;
+  }).catch(error => {
+    if (!fresh && cached) return cached.markets.map(row => ({ ...row,
+      source: 'CACHED_VERIFIED_REGISTRY_READ_ONLY' }));
+    throw error;
   }).finally(() => { inFlight = null; });
   return inFlight;
 }
@@ -115,7 +129,8 @@ export async function readVerifiedMarket(id: string, fresh = false) {
     grid: { tickSizeRaw: market.tickSizeRaw, lotSizeRaw: market.lotSizeRaw,
       minQuantityRaw: market.minQuantityRaw, baseDecimals: market.baseDecimals,
       quoteDecimals: market.quoteDecimals },
-    risk: { market: market.status === 'TRADEABLE' ? 'SUPPORTED' : 'BLOCKED', gas: 'NOT_RUN', reasons },
+    risk: { market: market.status === 'TRADEABLE' && market.source !== 'CACHED_VERIFIED_REGISTRY_READ_ONLY' ?
+      'SUPPORTED' : 'BLOCKED', gas: 'NOT_RUN', reasons },
     bot: { placeGrant: 'NOT_APPLICABLE', cancelGrant: 'NOT_APPLICABLE' },
     margin: { status: 'NOT_RUN', unlockedUsdso: 'UNKNOWN' },
     mode: 'LIVE_READ_ONLY' as const };

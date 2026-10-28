@@ -3,7 +3,8 @@
   const $ = id => document.getElementById(id);
   const set = (id, value) => { $(id).textContent = value == null || value === '' ? '—' : String(value); };
   const state = { market: null, proof: null, history: null, plan: null, tradeCommand: null, side: 'BUY',
-    observations: [], started: new Date(), marketBusy: false, historyBusy: false };
+    observations: [], started: new Date(), marketBusy: false, historyBusy: false, marketFailures: 0 };
+  let marketRetryTimer = null;
   const archiveButton = document.createElement('button');
   archiveButton.id = 'historical-tools'; archiveButton.type = 'button';
   archiveButton.className = 'button secondary'; archiveButton.textContent = 'Show historical owner evidence';
@@ -275,11 +276,14 @@
   }
   async function loadMarket() {
     if (state.marketBusy) return; state.marketBusy = true; $('refresh').disabled = true;
+    if (marketRetryTimer) { window.clearTimeout(marketRetryTimer); marketRetryTimer = null; }
     set('refresh', 'Refreshing live data...');
     const selected = $('market-select').value;
     try { const market = await read(`/api/v1/markets/snapshot?market=${encodeURIComponent(selected)}`);
-      if ($('market-select').value === selected) renderMarket(market); }
-    catch (error) { set('rpc-pill', 'RPC · UNKNOWN'); $('rpc-pill').className = 'pill bad';
+      if ($('market-select').value === selected) { state.marketFailures = 0; renderMarket(market); } }
+    catch (error) { if ($('market-select').value !== selected) return;
+      state.marketFailures++;
+      set('rpc-pill', 'RPC · UNKNOWN'); $('rpc-pill').className = 'pill bad';
       set('bot-pill', 'POOL · UNKNOWN'); $('bot-pill').className = 'pill muted';
       state.market = null; set('mark', '—'); set('market-block', 'UNKNOWN');
       set('book-reasons', error.message); set('chart-source', `Source error: ${error.message}`);
@@ -287,7 +291,10 @@
       updateBookFreshness(); updateRisk();
       window.dispatchEvent(new window.CustomEvent('canary:market', { detail: null })); }
     finally { state.marketBusy = false; $('refresh').disabled = false; set('refresh', 'Refresh live data');
-      if ($('market-select').value !== selected) window.setTimeout(loadMarket, 0); }
+      if ($('market-select').value !== selected) window.setTimeout(loadMarket, 0);
+      else if (state.marketFailures > 0 && state.marketFailures <= 3)
+        marketRetryTimer = window.setTimeout(() => { if ($('market-select').value === selected) loadMarket(); },
+          [3000, 8000, 20000][state.marketFailures - 1]); }
   }
   async function loadHistory() {
     if (state.historyBusy) return; state.historyBusy = true;
@@ -309,10 +316,15 @@
   $('refresh').onclick = () => { loadMarket();
     if (archiveButton.getAttribute('aria-expanded') === 'true') { loadOwnerAccount(); loadHistory(); loadPlan(); } };
   $('market-select').addEventListener('change', () => {
-    state.market = null; state.observations = []; state.started = new Date();
+    state.market = null; state.marketFailures = 0; state.observations = []; state.started = new Date();
     $('chart-line').setAttribute('d', ''); $('chart-dot').hidden = true;
     set('chart-count', '0 observed quotes'); set('chart-empty', 'Waiting for verified live observations.');
     $('chart-empty').hidden = false; $('quantity').value = ''; $('limit-price').value = '';
+    for (const id of ['mark', 'best-bid', 'best-ask', 'spread', 'book-bid', 'book-ask', 'book-spread']) set(id, '—');
+    set('market-block', 'LOADING'); set('book-block', 'LOADING'); set('book-time', '—');
+    set('book-reasons', `Loading ${$('market-select').value} book and verifying its pool…`);
+    $('depth-asks').replaceChildren(); $('depth-bids').replaceChildren();
+    window.dispatchEvent(new window.CustomEvent('canary:market', { detail: null }));
     updateBookFreshness(); loadMarket();
   });
   function selectSide(side) {

@@ -15,6 +15,7 @@ const chromePaths = [
   chromium.executablePath(),
 ].filter(Boolean);
 let browser, server, base;
+let serverStderr = '';
 
 async function freePort() {
   const socket = createServer();
@@ -30,7 +31,12 @@ before(async () => {
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], {
-    cwd: process.cwd(), env: { ...process.env, CANARY_PORT: String(port) }, stdio: 'ignore',
+    cwd: process.cwd(), env: { ...process.env, CANARY_PORT: String(port) }, stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  server.stderr.on('data', chunk => { serverStderr += String(chunk).slice(0, 2000); });
+  server.on('exit', (code, signal) => {
+    if (code !== 0 && signal !== 'SIGTERM')
+      process.stderr.write(`UI server exited: code=${code} signal=${signal} ${serverStderr}\n`);
   });
   let ready = false;
   for (let i = 0; i < 200; i++) {
@@ -85,9 +91,11 @@ async function fixturePage(initScript) {
   await page.route('**/api/v1/markets', route => route.fulfill({ json: { observedAt: new Date().toISOString(),
     markets: [
       { id: '0x4181dd08e73bbcdd1ba3e615a18f6abd941b94c0', symbol: 'BTC-PERP',
-        base: 'BTC', quote: 'USDso', status: 'TRADEABLE' },
+        marketType: 'PERP', base: 'BTC', quote: 'USDso', status: 'TRADEABLE',
+        lastIndexedPrice: '79800', openInterestBase: '3.2', fundingRateWindowPercent: null, maxLeverage: '20' },
       { id: '0xd6cb1dd58580b84d76068ac21594219ce03aeddf', symbol: 'ETH-PERP',
-        base: 'ETH', quote: 'USDso', status: 'TRADEABLE' },
+        marketType: 'PERP', base: 'ETH', quote: 'USDso', status: 'TRADEABLE',
+        lastIndexedPrice: '2346.15', openInterestBase: null, fundingRateWindowPercent: null, maxLeverage: '20' },
     ] } }));
   await page.route('**/api/v1/markets/snapshot?**', async route => {
     if (new URL(route.request().url()).searchParams.get('market') === 'BTC-PERP') {
@@ -110,6 +118,12 @@ async function fixturePage(initScript) {
     source: 'MOCKED', observedAt: new Date().toISOString(), candles: [] } }));
   await page.route('**/api/v1/markets/trades?**', route => route.fulfill({ json: {
     status: 'UNAVAILABLE', source: 'MOCKED', observedAt: new Date().toISOString(), trades: [] } }));
+  await page.route('**/api/v1/health/sources?**', route => route.fulfill({ json: {
+    market: new URL(route.request().url()).searchParams.get('market'),
+    rpc: { status: 'HEALTHY', detail: 'MOCKED RPC' },
+    websocket: { status: 'HEALTHY', detail: 'MOCKED WebSocket' },
+    indexer: { status: 'HEALTHY', detail: 'MOCKED indexer' },
+    pool: { status: 'HEALTHY', detail: 'MOCKED pool' } } }));
   await page.route('**/api/v1/position/intelligence?**', route => route.fulfill({ json: {
     source: 'MOCKED', block: '123', observedAt: new Date().toISOString(),
     availableMarginUsdso: '50', direction: 'FLAT', size: '0', entryPrice: null,
@@ -243,6 +257,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     for (let index = 2; index < 8; index++) {
       setMarket(market(String(34470000 + index), String(79800 + index * 10)));
       await page.locator('#refresh').click();
+      await page.locator('#chart-count').getByText(`${index + 1} observed quotes`).waitFor();
     }
     await page.locator('#chart-count').getByText('8 observed quotes').waitFor();
     assert.match(await page.locator('#chart-line').getAttribute('d'), /^M.*L/);
@@ -272,7 +287,7 @@ test('real Chromium: controls, exact clipboard commands, chart, risk, proof and 
     assert.match(await page.locator('#risk-badge').textContent(), /STALE/);
     setMarket({ error: 'RPC fixture unavailable' });
     await refresh.click();
-    await page.locator('#rpc-pill').getByText('RPC · UNKNOWN').waitFor();
+    await page.waitForFunction(() => document.getElementById('rpc-pill').textContent.includes('UNKNOWN'));
     assert.match(await page.locator('#chart-source').textContent(), /Source error/);
     assert.equal(await page.locator('#mark').textContent(), '—');
     assert.ok(errors.some(error => error.includes('503')), 'expected network failure is visible in console');
@@ -289,10 +304,10 @@ test('real Chromium: M7 unavailable history and verified execution replay', asyn
     await page.locator('#replay-steps').getByText(/OrderFilled/).waitFor();
     assert.match(await page.locator('#replay-steps').innerText(), /NOT_RECORDED_FOR_THIS_ORDER/);
     assert.match(await page.locator('#replay-steps').innerText(), /0\.05416.*0\.05429/);
-    mkdirSync('docs/screenshots', { recursive: true });
-    await page.locator('.execution-replay').screenshot({ path: 'docs/screenshots/m7-replay-verified.png' });
+    mkdirSync('test-results', { recursive: true });
+    await page.locator('.execution-replay').screenshot({ path: 'test-results/m73-replay-mocked-ui.png' });
     await page.locator('#replay-close').click();
-    await page.screenshot({ path: 'docs/screenshots/m7-terminal-mocked.png', fullPage: true });
+    await page.screenshot({ path: 'test-results/m73-terminal-mocked-ui.png', fullPage: true });
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
@@ -338,7 +353,11 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
       prepareCalls++;
       route.fulfill({ json: { status: prepareStatus, guard: { verdict: prepareStatus === 'READY' ? 'GREEN' : 'RED',
         blockers: prepareStatus === 'READY' ? [] : ['Contract simulation failed.'], warnings: [],
-        notionalRaw: '10374793000000000000' }, transaction: prepareStatus === 'READY' ? tx : null } });
+        notionalRaw: '10374793000000000000' },
+      observation: { chainId: 50383, observedAt: new Date().toISOString(), block: '123',
+        account: { address: account }, book: { status: 'TRUSTED', bid: '79806.1', ask: '79806.3', block: '123' } },
+      marginPreview: { sufficient: true, lockUsdso: '10', asOfBlock: '123' },
+      transaction: prepareStatus === 'READY' ? tx : null } });
     });
     await page.route('**/api/v1/trade/receipt?**', route => route.fulfill({ json: {
       state: receiptState, hash: txHash, block: '456', orderId: '789' } }));
@@ -389,6 +408,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 2);
     assert.equal(await page.evaluate(() => window.__walletMock.lastTx.nonce), '0x0');
     assert.ok(prepareCalls >= 4);
+    await page.locator('#account-tab-button-balances').click();
     await page.locator('#action-amount').fill('10');
     await page.locator('#review-action').click();
     await page.locator('#action-review').waitFor();
@@ -396,6 +416,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#confirm-action').click();
     await page.locator('#action-result').getByText(/APPROVE CONFIRMED/).waitFor();
     assert.equal(await page.evaluate(() => window.__walletMock.sends), 3);
+    await page.locator('#account-tab-button-orders').click();
     await page.locator('.wallet-order-row button').click();
     assert.equal(await page.locator('#wallet-action').inputValue(), 'CANCEL');
     assert.equal(await page.locator('#action-order-id').inputValue(), '789');
@@ -523,8 +544,10 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
         blockers: crossed ? ['PostOnly limit would cross the opposite book top.'] :
           place ? [] : ['No effective placeOrderFor grant'], warnings: [],
         notionalRaw: '10374793000000000000' },
-      observation: { block: String(456 + placePrepares), book: { bid: '79806.1', ask: crossed ? '79806.1' : '79806.3' } },
-      account: { marginUnlocked: '999.48', permissions: { place } },
+      observation: { chainId: 50383, observedAt: new Date().toISOString(), block: String(456 + placePrepares),
+        account: { address: operator }, book: { status: 'TRUSTED', bid: '79806.1', ask: crossed ? '79806.1' : '79806.3' } },
+      account: { owner, marginUnlocked: '999.48', permissions: { place } },
+      marginPreview: { sufficient: true, lockUsdso: '10', asOfBlock: String(456 + placePrepares) },
       transaction: place && !crossed ? { ...tx, gas: placePrepares >= 3 ? '0x310000' : tx.gas } : null } }); });
     await page.route('**/api/v1/trade/delegated/cancel/prepare', route => { cancelPrepares++; route.fulfill(staleOrder ?
       { status: 409, json: { code: 'ORDER_NOT_OPEN', readBlock: '999',
@@ -542,6 +565,7 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
     await page.locator('#mode-delegated').click();
     await page.locator('#wallet-permissions').getByText(/place BLOCKED/).waitFor();
     assert.match(await page.locator('#wallet-balances').textContent(), /Wallet 1 free margin 999\.48/);
+    await page.locator('#account-tab-button-history').click();
     await page.locator('#load-order-history').click();
     await page.locator('#history-rows').getByText(/#421.*Cancelled/).waitFor();
     await page.locator('#quantity').fill('0.00013'); await page.locator('#use-bid').click();
@@ -569,6 +593,7 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
     await page.locator('#preflight-details').getByText(/book: PostOnly limit would cross/).waitFor();
     assert.match(await page.locator('#preflight-details').textContent(), /fresh bid 79806\.1 \/ ask 79806\.1/);
     assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 1);
+    await page.locator('#account-tab-button-orders').click();
     await page.locator('.wallet-order-row button').click();
     await page.locator('#review-action').click();
     await page.locator('#action-review').waitFor();
@@ -578,10 +603,12 @@ test('real Chromium MOCKED: delegated Wallet 1 grant, owner margin, review and c
     await page.locator('#action-result').getByText(/User rejected request/).waitFor();
     assert.equal(await page.evaluate(() => window.__delegatedWallet.sends), 2);
     assert.equal(await page.evaluate(() => window.__delegatedWallet.lastTx.gas), '0x320000');
+    await page.locator('#account-tab-button-orders').click();
     await page.locator('.wallet-order-row button').click();
     staleOrder = true;
     await page.locator('#review-action').click();
     await page.locator('#action-result').getByText(/no longer open.*block 999/).waitFor();
+    await page.locator('#account-tab-button-history').click();
     await page.locator('#history-rows').getByText(/#421.*Filled/).waitFor();
     assert.equal(await page.locator('.wallet-order-row').count(), 0);
     assert.equal(await page.locator('#action-order-id').inputValue(), '');
@@ -607,6 +634,60 @@ test('real Chromium: verified market switching uses ETH decimals and resets obse
   } finally { await context.close(); }
 });
 
+test('real Chromium: market dialog search, favorites, recents and rapid switching', async () => {
+  const { context, page, errors, setDelay } = await fixturePage();
+  try {
+    await page.locator('#open-market-selector').click();
+    assert.equal(await page.locator('.market-list-row').count(), 2);
+    await page.locator('#market-search').fill('ETH');
+    assert.equal(await page.locator('.market-list-row').count(), 1);
+    await page.locator('.market-favorite').click();
+    await page.locator('[data-filter="favorites"]').click();
+    assert.equal(await page.locator('.market-list-row').count(), 1);
+    await page.locator('.market-row-select[data-symbol="ETH-PERP"]').click();
+    assert.equal(await page.locator('#market-select').inputValue(), 'ETH-PERP');
+    await page.locator('#book-badge').getByText('TRUSTED').waitFor();
+    await page.locator('#open-market-selector').click();
+    await page.locator('#market-search').fill('');
+    await page.locator('[data-filter="recent"]').click();
+    assert.equal(await page.locator('.market-list-row').count(), 1);
+    await page.locator('#market-search').focus();
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.symbol), 'ETH-PERP');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#market-dialog').evaluate(dialog => dialog.open), false);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-market-selector');
+    setDelay(250);
+    await page.locator('#market-select').selectOption('BTC-PERP');
+    await page.locator('#market-select').selectOption('ETH-PERP');
+    await page.waitForFunction(() => document.querySelector('#book-badge').textContent === 'TRUSTED' &&
+      Number(document.querySelector('#book-bid').textContent.replaceAll(',', '')) < 10000);
+    assert.equal(await page.locator('#market-select').inputValue(), 'ETH-PERP');
+    assert.match(await page.locator('.book-labels').textContent(), /QTY \(ETH\)/);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium: degraded transport reports source and blocks stale book actions', async () => {
+  const { context, page, errors, setMarket } = await fixturePage();
+  try {
+    await page.route('**/api/v1/health/sources?**', route => route.fulfill({ json: {
+      market: 'BTC-PERP', rpc: { status: 'HEALTHY', code: 'OK', detail: 'HTTP RPC responds' },
+      websocket: { status: 'UNAVAILABLE', code: 'NETWORK_PERMISSION', detail: 'WebSocket blocked' },
+      indexer: { status: 'HEALTHY', code: 'OK', detail: 'Indexer responds' },
+      pool: { status: 'HEALTHY', code: 'OK', detail: 'Pool active' } } }));
+    setMarket({ error: 'WebSocket transport unavailable' });
+    await page.locator('#refresh').click();
+    await page.locator('.source-chip').getByText('WebSocket offline').waitFor();
+    await page.locator('#book-badge').getByText('UNTRUSTED').waitFor();
+    assert.equal(await page.locator('#use-bid').isDisabled(), true);
+    assert.equal(await page.locator('#copy-prepare').isDisabled(), true);
+    await page.locator('#source-health details summary').click();
+    assert.match(await page.locator('.source-details').textContent(), /WebSocket blocked/);
+    assert.ok(errors.some(error => error.includes('503')));
+  } finally { await context.close(); }
+});
+
 test('real Chromium: wide and responsive layout, typography and panel geometry', async () => {
   const { context, page, errors } = await fixturePage();
   try {
@@ -624,7 +705,7 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
         const proof = rect('.proof-panel');
         return { width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth,
           overflowNodes: [...document.querySelectorAll('body *')].filter(node =>
-            node.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 8).map(node =>
+            !node.closest('.account-tabs') && node.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 8).map(node =>
             `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}${node.className && typeof node.className === 'string' ? `.${node.className.split(' ')[0]}` : ''}`),
           brandNav: intersects(brand, nav), brandStatus: intersects(brand, status), navStatus: intersects(nav, status),
           brandVisible: brand.width > 100 && brand.height > 20,
@@ -653,7 +734,7 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
         layout.book.width > (width < 550 ? 250 : 300) && layout.trade.width > (width < 550 ? 250 : 300),
         `panel width at ${width}: ${JSON.stringify(layout)}`);
       assert.equal(layout.tableFits && layout.proofFits, true, `table or hash overflow at ${width}: ${JSON.stringify(layout)}`);
-      if (width >= 1600) {
+      if (width >= 1351) {
         assert.ok(layout.chart.x < layout.book.x && layout.book.x < layout.trade.x &&
           Math.abs(layout.chart.y - layout.book.y) < 2 && Math.abs(layout.book.y - layout.trade.y) < 2,
         `desktop panel order at ${width}: ${JSON.stringify(layout)}`);
@@ -661,7 +742,7 @@ test('real Chromium: wide and responsive layout, typography and panel geometry',
         assert.ok(layout.chart.x < layout.book.x && layout.chart.y < layout.trade.y &&
           layout.trade.y < layout.risk.y && layout.portfolio.x < layout.proof.x,
         `laptop panel order at ${width}: ${JSON.stringify(layout)}`);
-      } else if (width >= 701) {
+      } else if (width >= 801) {
         assert.ok(layout.chart.x < layout.book.x && layout.chart.y < layout.trade.y &&
           layout.trade.y < layout.risk.y && layout.risk.y < layout.portfolio.y &&
           layout.portfolio.y < layout.proof.y,
@@ -748,6 +829,12 @@ test('real Chromium: legacy page serves readable UTF-8 and navigation works', as
     assert.equal((await page.goto(base)).status(), 200);
     assert.equal(await page.evaluate(() => document.characterSet), 'UTF-8');
   } finally { await context.close(); }
+});
+
+test('local source health route rejects invalid market input before network access', async () => {
+  const response = await fetch(`${base}/api/v1/health/sources?market=../BTC-PERP`);
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Invalid perp market symbol' });
 });
 
 test('real Chromium: live RPC smoke', { skip: process.env.CANARY_UI_LIVE !== '1' }, async () => {
