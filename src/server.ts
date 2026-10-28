@@ -39,6 +39,7 @@ import { readMarketCandles, readMarketTrades } from './market-history.ts';
 import { readPositionIntelligence } from './position-intelligence.ts';
 import { readExecutionReplay } from './execution-replay.ts';
 import { readSourceHealth } from './source-health.ts';
+import { TradeStageError, TradeUserError } from './trade-stage.ts';
 
 const evidenceDir = resolve('evidence');
 const htmlPath = resolve('web/index.html');
@@ -223,7 +224,7 @@ createServer(async (request, response) => {
     } else if (request.method === 'POST' && path === '/api/v1/trade/prepare') {
       const body = await jsonBody(request);
       if (body.orderType !== 'POST_ONLY' || !['BUY', 'SELL'].includes(String(body.side)))
-        throw Error('Only BUY/SELL PostOnly is supported');
+        throw new TradeUserError('Only BUY/SELL PostOnly is supported. Select a directional side and review again.');
       json(response, 200, await prepareDirectTrade(body as DirectInput));
     } else if (request.method === 'GET' && path === '/api/v1/trade/receipt') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
@@ -232,7 +233,7 @@ createServer(async (request, response) => {
     } else if (request.method === 'POST' && path === '/api/v1/trade/action/prepare') {
       const body = await jsonBody(request);
       if (!['APPROVE', 'DEPOSIT', 'WITHDRAW', 'CANCEL'].includes(String(body.action)))
-        throw Error('Unsupported wallet action');
+        throw new TradeUserError('Unsupported wallet action. Select Approve, Deposit, Withdraw or Cancel.');
       json(response, 200, await prepareWalletAction(body as WalletActionInput));
     } else if (request.method === 'GET' && path === '/api/v1/trade/action/receipt') {
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams;
@@ -489,9 +490,14 @@ createServer(async (request, response) => {
       if (error instanceof OrderNotOpenError) {
         json(response, 409, { error: 'Order is no longer open for the selected account and market',
           code: error.code, orderId: error.orderId, readBlock: error.block });
+      } else if (error instanceof TradeStageError) {
+        json(response, error.retryable ? 503 : 409, { error: error.message,
+          code: error.code, phase: error.phase, retryable: error.retryable });
+      } else if (error instanceof TradeUserError) {
+        json(response, 400, { error: error.message, code: error.code, retryable: false });
       } else if (error instanceof PreflightError) {
         json(response, 503, { error: 'Live market or account check is unavailable; retry a fresh review',
-          code: 'LIVE_CHECK_UNAVAILABLE', retryable: true });
+          code: error.code, phase: error.phase, retryable: true });
       } else {
         json(response, 400, { error: 'Request could not be completed; check inputs or retry',
           code: 'REQUEST_REJECTED' });

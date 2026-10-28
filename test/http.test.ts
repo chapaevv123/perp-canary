@@ -8,9 +8,9 @@ async function reader(status: number, contentType: string, body: string) {
   const calls = { text: 0 };
   const fetch = async () => ({ status, ok: status >= 200 && status < 300,
     headers: { get: () => contentType }, text: async () => { calls.text++; return body; } });
-  const html = await readFile('web/legacy.html', 'utf8');
-  const functionSource = html.match(/^async function readJson\(url,options\).*$/m)?.[0];
-  assert.ok(functionSource, 'readJson must stay inline so an older server can serve it');
+  const script = await readFile('web/legacy.js', 'utf8');
+  const functionSource = script.match(/^async function readJson\(url,options\).*$/m)?.[0];
+  assert.ok(functionSource, 'legacy readJson must remain available without bundling');
   runInNewContext(`${functionSource}\nwindow.canaryReadJson=readJson`, { window, fetch });
   return { read: window.canaryReadJson!, calls };
 }

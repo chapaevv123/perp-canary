@@ -18,16 +18,18 @@ function observation(): TradeObservation {
       maxPlaceable: true, limitedBy: 'MARGIN' } };
 }
 
-test('direct trade guard accepts only a fresh, grid aligned, margin placeable PostOnly limit', () => {
+test('direct trade input gate checks fresh grid-aligned PostOnly without treating conservative max as final', () => {
   assert.equal(assessDirectTrade(input, observation()).verdict, 'GREEN');
   assert.equal(assessDirectTrade({ ...input, side: 'SELL', price: '79806.3' }, observation()).verdict, 'AMBER');
   assert.equal(assessDirectTrade({ ...input, price: '79806.3' }, observation()).verdict, 'RED');
   assert.equal(assessDirectTrade({ ...input, price: '79806.15' }, observation()).verdict, 'RED');
-  assert.equal(assessDirectTrade({ ...input, quantity: '0.01' }, observation()).verdict, 'RED');
+  const larger = assessDirectTrade({ ...input, quantity: '0.01' }, observation());
+  assert.equal(larger.verdict, 'AMBER');
+  assert.match(larger.warnings.join(' '), /conservative maximum-size estimate/);
   assert.equal(assessDirectTrade({ ...input, orderType: 'IOC' as DirectInput['orderType'] }, observation()).verdict, 'RED');
 });
 
-test('direct trade guard blocks stale books, wrong chain, missing gas and insufficient margin size', () => {
+test('direct trade input gate blocks stale books, wrong chain and missing gas; max estimate remains advisory', () => {
   const stale = observation(); stale.book.observedAt = new Date(Date.now() - 31_000).toISOString();
   assert.match(assessDirectTrade(input, stale).blockers.join(' '), /stale/);
   const wrong = observation(); wrong.chainId = 1;
@@ -35,7 +37,7 @@ test('direct trade guard blocks stale books, wrong chain, missing gas and insuff
   const noGas = observation(); noGas.account.gasWei = '0';
   assert.match(assessDirectTrade(input, noGas).blockers.join(' '), /no STT/);
   const noMargin = observation(); noMargin.account.maxPlaceable = false;
-  assert.match(assessDirectTrade(input, noMargin).blockers.join(' '), /Margin size unavailable/);
+  assert.match(assessDirectTrade(input, noMargin).warnings.join(' '), /maximum-size estimate/);
 });
 
 test('no Canary cap at 500, 1000 or 10000 USDso; optional wallet limit blocks exactly', () => {

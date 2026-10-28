@@ -8,6 +8,8 @@ import { RPC, readRpcHead } from './rpc-health.ts';
 import { BTC_POOL, HIDEKI_MARGIN_BANK } from './trade-forensics.ts';
 import { readVerifiedMarket, verifiedMarket } from './market-registry.ts';
 import { customNotionalLimit } from './trading-limit.ts';
+import { TradeStageError, TradeUserError, tradeStage } from './trade-stage.ts';
+import { decodeExecutionError } from './execution-error-decoder.ts';
 
 export const DIRECT_PLACE_ABI = parseAbi([
   'function placeOrder(bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) returns (bool success,uint128 orderId)',
@@ -86,9 +88,9 @@ export function assessDirectTrade(input: DirectInput, o: TradeObservation, now =
     } else warnings.push('Deeper book liquidity is unavailable; execution impact cannot be estimated.');
   } catch { blockers.push('Enter a positive price and quantity with BTC/USDso decimals.'); }
   if (!o.account.maxPriceable || !o.account.maxPlaceable || o.account.maxQuantityRaw === null)
-    blockers.push(`Margin size unavailable or blocked${o.account.limitedBy ? `: ${o.account.limitedBy}` : ''}.`);
+    warnings.push(`SDK maximum-size estimate is unavailable or conservative${o.account.limitedBy ? ` (${o.account.limitedBy})` : ''}; exact margin preview and contract simulation must pass.`);
   else if (quantity !== null && quantity > BigInt(o.account.maxQuantityRaw))
-    blockers.push(`Quantity exceeds account placeable size (${o.account.limitedBy ?? 'margin'}).`);
+    warnings.push(`Quantity exceeds the SDK conservative maximum-size estimate (${o.account.limitedBy ?? 'margin'}); exact margin preview and contract simulation must pass.`);
   if (BigInt(o.account.gasWei) <= 0n) blockers.push('Wallet has no STT for gas.');
   if (BigInt(o.account.marginUnlockedRaw) <= 0n && quantity !== null && quantity > 0n)
     warnings.push('No unlocked MarginBank collateral; a reducing order may still be possible.');
@@ -112,20 +114,20 @@ async function withSdk<T>(work: (sdk: SomniaMarkets) => Promise<T>): Promise<T> 
 }
 export async function readDirectAccount(rawAccount: string, marketId = BTC_POOL) {
   const account = address(rawAccount);
-  const selected = await verifiedMarket(marketId);
-  const head = await readRpcHead();
+  const selected = await tradeStage('market registry', () => verifiedMarket(marketId));
+  const head = await tradeStage('Hideki chain and block', () => readRpcHead());
   if (head.chainId !== 50383) throw Error('Hideki RPC chain mismatch');
   return withSdk(async sdk => {
-    const system = await sdk.client.getPerpSystemConfig(selected.marginBank);
+    const system = await tradeStage('perps system configuration', () => sdk.client.getPerpSystemConfig(selected.marginBank));
     const [bank, gas, walletUsdso, allowance, margin, position, open] = await Promise.all([
-      client.readContract({ address: selected.pool, abi: poolAbi, functionName: 'marginBank' }),
-      client.getBalance({ address: account }),
-      client.readContract({ address: system.collateralToken, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
-      client.readContract({ address: system.collateralToken, abi: erc20Abi, functionName: 'allowance',
-        args: [account, selected.marginBank] }),
-      sdk.client.getMarginAccount(selected.marginBank, account),
-      sdk.client.getPerpPosition({ marginBank: selected.marginBank, pool: selected.pool, account }),
-      sdk.client.getOpenOrdersOnchain([selected.pool], account, { blockNumber: BigInt(head.blockNumber) }),
+      tradeStage('pool MarginBank address', () => client.readContract({ address: selected.pool, abi: poolAbi, functionName: 'marginBank' })),
+      tradeStage('wallet STT balance', () => client.getBalance({ address: account })),
+      tradeStage('wallet USDso balance', () => client.readContract({ address: system.collateralToken, abi: erc20Abi, functionName: 'balanceOf', args: [account] })),
+      tradeStage('wallet USDso allowance', () => client.readContract({ address: system.collateralToken, abi: erc20Abi, functionName: 'allowance',
+        args: [account, selected.marginBank] })),
+      tradeStage('MarginBank account', () => sdk.client.getMarginAccount(selected.marginBank, account)),
+      tradeStage('selected-market position', () => sdk.client.getPerpPosition({ marginBank: selected.marginBank, pool: selected.pool, account })),
+      tradeStage('selected-market open orders', () => sdk.client.getOpenOrdersOnchain([selected.pool], account, { blockNumber: BigInt(head.blockNumber) })),
     ]);
     if (bank.toLowerCase() !== HIDEKI_MARGIN_BANK.toLowerCase()) throw Error('Pool MarginBank mismatch');
     return { account, chainId: head.chainId, block: head.blockNumber, observedAt: new Date().toISOString(),
@@ -147,50 +149,75 @@ export async function readDirectAccount(rawAccount: string, marketId = BTC_POOL)
 export async function prepareDirectTrade(input: DirectInput) {
   const account = address(input.account);
   const marketId = input.market ?? BTC_POOL;
-  const [market, user] = await Promise.all([readVerifiedMarket(marketId, true), readDirectAccount(account, marketId)]);
-  if (!/^\d+(?:\.\d+)?$/.test(input.price)) throw Error('Invalid limit price');
-  const price = parseUnits(input.price, market.market.quoteDecimals);
-  const max = await withSdk(async sdk => sdk.client.getMaxPerpOrderSize({
-    pool: market.market.pool, marginBank: market.market.marginBank,
-    account, isBid: input.side === 'BUY', price }));
+  const [selected, user] = await Promise.all([
+    tradeStage('market registry', () => verifiedMarket(marketId, true)),
+    tradeStage('direct wallet account', () => readDirectAccount(account, marketId)),
+  ]);
+  if (!/^\d+(?:\.\d+)?$/.test(input.price)) throw new TradeUserError('Enter a positive decimal limit price.');
+  let price: bigint;
+  try { price = parseUnits(input.price, selected.quoteDecimals); }
+  catch { throw new TradeUserError(`Limit price exceeds the ${selected.quoteDecimals}-decimal exchange precision.`); }
+  const max = await tradeStage('direct wallet maximum placeable size', () => withSdk(async sdk => sdk.client.getMaxPerpOrderSize({
+    pool: selected.pool, marginBank: selected.marginBank,
+    account, isBid: input.side === 'BUY', price, autoPull: true }))).catch(() => null);
+  const market = await tradeStage('fresh selected-market book and metadata', () => readVerifiedMarket(marketId, true));
   const observation: TradeObservation = { chainId: market.chainId, observedAt: market.observedAt,
     block: market.block, pool: user.pool, expectedPool: market.market.pool, marginBank: user.marginBank,
     book: market.book, depth: market.depth, mark: market.mark, grid: market.grid, account: {
       address: user.account, gasWei: user.gasWei, walletUsdsoRaw: user.walletUsdsoRaw,
-      marginUnlockedRaw: user.marginUnlockedRaw, maxQuantityRaw: max.priceable ? max.maxQuantity.toString() : null,
-      maxPriceable: max.priceable, maxPlaceable: max.priceable && max.placeable,
-      limitedBy: max.priceable ? max.limitedBy : 'STALE_MARK',
+      marginUnlockedRaw: user.marginUnlockedRaw, maxQuantityRaw: max?.priceable ? max.maxQuantity.toString() : null,
+      maxPriceable: max?.priceable ?? false, maxPlaceable: !!max?.priceable && max.placeable,
+      limitedBy: max?.priceable ? max.limitedBy : max ? 'STALE_MARK' : 'MAX_SIZE_READ_UNAVAILABLE',
     } };
   const guard = assessDirectTrade(input, observation);
   if (guard.verdict === 'RED' || !guard.priceRaw || !guard.quantityRaw)
     return { status: 'BLOCKED' as const, guard, observation, transaction: null };
-  const preview = await withSdk(async sdk => sdk.client.previewPerpOrderMargin({
+  const preview = await tradeStage('direct wallet margin preview', () => withSdk(async sdk => sdk.client.previewPerpOrderMargin({
     pool: market.market.pool, marginBank: market.market.marginBank, account,
-    isBid: input.side === 'BUY', price: BigInt(guard.priceRaw!), quantity: BigInt(guard.quantityRaw!) }));
+    isBid: input.side === 'BUY', price: BigInt(guard.priceRaw!), quantity: BigInt(guard.quantityRaw!), autoPull: true })));
+  const marginReasons = !preview.priceable ? ['Current mark is stale or unavailable; margin cannot be priced.'] : [
+    !preview.hasCollateralForLock ? 'Not enough unlocked or wallet-pull collateral for this order lock.' : null,
+    !preview.meetsInitialMargin ? 'Account equity would not meet initial margin after this order.' : null,
+    !preview.walletCoversTopUp ? 'Wallet USDso balance or MarginBank allowance cannot cover the required top-up.' : null,
+    preview.voucherBlocked ? 'Paper USDso voucher rules block increasing this market position.' : null,
+    preview.restrictedBlocked ? 'Market is close-only for increasing orders.' : null,
+    preview.isolationBlocked ? 'Isolated account is bound to another market.' : null,
+  ].filter((reason): reason is string => reason !== null);
+  if (preview.priceable && !preview.sufficient && marginReasons.length === 0)
+    marginReasons.push('SDK margin preview rejected this exact order; refresh account and market evidence.');
   const marginPreview = { status: preview.priceable ? 'OK' as const : 'UNPRICEABLE' as const,
     sufficient: preview.priceable && preview.sufficient,
     lockUsdso: preview.priceable ? formatUnits(preview.lockAmount, 18) : null,
     initialRequirementUsdso: preview.priceable ? formatUnits(preview.imRequirement, 18) : null,
+    topUpUsdso: preview.priceable ? formatUnits(preview.topUpRequired, 18) : null,
+    reasons: marginReasons,
     asOfBlock: preview.asOfBlock.toString() };
   if (!marginPreview.sufficient) return { status: 'BLOCKED' as const,
     guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
-      'MarginBank preview cannot prove sufficient collateral for this order'] },
+      ...marginReasons] },
     observation, marginPreview, transaction: null };
   const now = Date.now();
   const expiresAt = input.expiresAt ?? now + 300_000;
   if (!Number.isInteger(expiresAt) || expiresAt < now + 30_000 || expiresAt > now + 300_000)
-    throw Error('Order expiry must remain within the 300-second safety window');
+    throw new TradeUserError('Order expiry must remain within the 300-second safety window. Start a fresh review.');
   const data = encodeFunctionData({ abi: DIRECT_PLACE_ABI, functionName: 'placeOrder',
     args: [input.side === 'BUY', 0n, BigInt(guard.priceRaw), BigInt(guard.quantityRaw),
       BigInt(expiresAt) * 1_000_000n, 3, 0, ZERO, 0n] });
   let gas: bigint;
   try { gas = await client.estimateGas({ account, to: market.market.pool, data, value: 0n }); }
-  catch (error) { return { status: 'BLOCKED' as const,
-    guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
-      `Contract simulation failed: ${error instanceof Error ? error.message : 'UNKNOWN'}`] }, observation,
-    marginPreview, transaction: null }; }
-  const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
-    client.getTransactionCount({ address: account, blockTag: 'pending' })]);
+  catch (error) {
+    const decoded = decodeExecutionError(error, 'ESTIMATE_GAS');
+    if (decoded.errorClass !== 'CONTRACT_REVERT')
+      throw new TradeStageError('direct contract simulation', 'READ_FAILED', true);
+    return { status: 'BLOCKED' as const,
+      guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
+        `${decoded.rootCause}. ${decoded.safeNextAction}`] }, observation,
+      marginPreview, transaction: null };
+  }
+  const [gasPrice, nonce] = await Promise.all([
+    tradeStage('Hideki gas price', () => client.getGasPrice()),
+    tradeStage('wallet pending nonce', () => client.getTransactionCount({ address: account, blockTag: 'pending' })),
+  ]);
   const gasLimit = gas * 12n / 10n;
   const maxCost = gasLimit * gasPrice;
   if (maxCost > gasBudget || maxCost > BigInt(user.gasWei)) return { status: 'BLOCKED' as const,
@@ -256,40 +283,49 @@ export async function prepareWalletAction(input: WalletActionInput) {
   const user = await readDirectAccount(account, market.id);
   if (user.chainId !== 50383 || user.marketId.toLowerCase() !== market.id.toLowerCase() ||
     user.pool.toLowerCase() !== market.pool.toLowerCase() ||
-    user.collateral.toLowerCase() !== COLLATERAL.toLowerCase()) throw Error('Wallet market or collateral mismatch');
+    user.collateral.toLowerCase() !== COLLATERAL.toLowerCase()) throw new TradeUserError('Wallet market or collateral differs from the verified Hideki deployment. Refresh account and market.');
   let to: Address, data: Hex, amountRaw: bigint | null = null;
   if (input.action === 'CANCEL') {
-    if (!input.orderId || !/^\d+$/.test(input.orderId)) throw Error('Invalid order ID');
+    if (!input.orderId || !/^\d+$/.test(input.orderId)) throw new TradeUserError('Select a valid current open order ID.');
     const id = BigInt(input.orderId);
     if (id <= 0n || id >= 2n ** 128n || !user.openOrders.some(order => order.id === input.orderId))
-      throw Error('Order is not currently open for this wallet and market');
+      throw new TradeUserError('Order is no longer open for this wallet and market. Refresh Orders and History.');
     to = market.pool;
     data = encodeFunctionData({ abi: DIRECT_CANCEL_ABI, functionName: 'cancelOrder', args: [id] });
   } else {
-    if (!input.amount || !/^\d+(?:\.\d+)?$/.test(input.amount)) throw Error('Enter a positive USDso amount');
+    if (!input.amount || !/^\d+(?:\.\d{1,18})?$/.test(input.amount)) throw new TradeUserError('Enter a positive USDso amount with at most 18 decimals.');
     amountRaw = parseUnits(input.amount, 18);
-    if (amountRaw <= 0n) throw Error('Margin action amount must be positive');
+    if (amountRaw <= 0n) throw new TradeUserError('Margin action amount must be positive.');
     if (input.action === 'APPROVE') {
-      if (BigInt(user.allowanceRaw) >= amountRaw) throw Error('Existing allowance already covers this amount');
+      if (BigInt(user.allowanceRaw) >= amountRaw) throw new TradeUserError('Existing MarginBank allowance already covers this amount.');
       to = user.collateral;
       data = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [market.marginBank, amountRaw] });
     } else if (input.action === 'DEPOSIT') {
-      if (BigInt(user.walletUsdsoRaw) < amountRaw) throw Error('Wallet USDso balance is insufficient');
-      if (BigInt(user.allowanceRaw) < amountRaw) throw Error('Approve this exact USDso amount first');
+      if (BigInt(user.walletUsdsoRaw) < amountRaw) throw new TradeUserError('Wallet USDso balance is below this deposit amount.');
+      if (BigInt(user.allowanceRaw) < amountRaw) throw new TradeUserError('Approve this exact USDso amount before depositing.');
       to = market.marginBank;
       data = encodeFunctionData({ abi: bankWriteAbi, functionName: 'deposit', args: [amountRaw] });
     } else if (input.action === 'WITHDRAW') {
-      if (BigInt(user.withdrawableRaw) < amountRaw) throw Error('MarginBank withdrawable balance is insufficient');
+      if (BigInt(user.withdrawableRaw) < amountRaw) throw new TradeUserError('MarginBank withdrawable balance is below this amount.');
       to = market.marginBank;
       data = encodeFunctionData({ abi: bankWriteAbi, functionName: 'withdraw', args: [amountRaw] });
-    } else throw Error('Unsupported wallet action');
+    } else throw new TradeUserError('Unsupported wallet action.');
   }
-  const gas = await client.estimateGas({ account, to, data, value: 0n });
+  let gas: bigint;
+  try { gas = await client.estimateGas({ account, to, data, value: 0n }); }
+  catch (error) {
+    const decoded = decodeExecutionError(error, 'ESTIMATE_GAS');
+    if (decoded.errorClass === 'CONTRACT_REVERT')
+      throw new TradeUserError(`${decoded.rootCause}. ${decoded.safeNextAction}`);
+    throw new TradeStageError('wallet action simulation', 'READ_FAILED', true);
+  }
   const gasLimit = gas * 12n / 10n;
-  const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
-    client.getTransactionCount({ address: account, blockTag: 'pending' })]);
+  const [gasPrice, nonce] = await Promise.all([
+    tradeStage('Hideki gas price', () => client.getGasPrice()),
+    tradeStage('wallet pending nonce', () => client.getTransactionCount({ address: account, blockTag: 'pending' })),
+  ]);
   if (gasLimit * gasPrice > gasBudget || gasLimit * gasPrice > BigInt(user.gasWei))
-    throw Error('Simulated gas exceeds wallet balance or 0.1 STT budget');
+    throw new TradeUserError('Simulated gas exceeds wallet STT balance or the 0.1 STT safety budget.');
   return { status: 'READY' as const, action: input.action, market: market.symbol, marketId: market.id,
     amount: input.amount ?? null, amountRaw: amountRaw?.toString() ?? null, orderId: input.orderId ?? null,
     allowance: user.allowance, walletUsdso: user.walletUsdso, withdrawable: user.withdrawable,

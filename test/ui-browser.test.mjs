@@ -346,7 +346,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     expiresAt: new Date(Date.now() + 280000).toISOString(),
     maxGasCostStt: '0.001' };
   try {
-    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: { account, gasStt: '1',
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: { account, market: 'BTC-PERP', gasStt: '1',
       walletUsdso: '100', allowance: '0', marginUnlocked: '50', withdrawable: '10',
       position: { sizeBtc: '0', entryPrice: '0' },
       openOrders: [{ id: '789', side: 'BUY', remaining: '0.00013', price: '79806.1' }], block: '123' } }));
@@ -380,7 +380,7 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#wallet-details-close').click();
     await page.locator('#quantity').fill('0.00013');
     await page.locator('#use-bid').click();
-    assert.equal(await page.locator('#guard-decision').textContent(), 'READY FOR REVIEW');
+    assert.equal(await page.locator('#guard-decision').textContent(), 'INPUTS COMPLETE');
     assert.equal(await page.locator('#confirm-wallet').isDisabled(), true);
     assert.equal(await page.locator('#use-ask').isDisabled(), true);
     prepareStatus = 'BLOCKED';
@@ -445,6 +445,40 @@ test('real Chromium: wallet review, rejection, guarded submission and mocked rec
     await page.locator('#wallet-disconnect').click();
     assert.equal(await page.locator('#review-order').isDisabled(), true);
     assert.deepEqual(errors.filter(message => !message.includes('503 (Service Unavailable)')), []);
+  } finally { await context.close(); }
+});
+
+test('real Chromium MOCKED: failed preflight is UNKNOWN and identifies failed read without wallet request', async () => {
+  const account = '0x1111111111111111111111111111111111111111';
+  const { context, page } = await fixturePage(() => {
+    window.__walletCalls = 0;
+    window.ethereum = { on() {}, removeListener() {}, async request({ method }) {
+      if (method === 'eth_requestAccounts' || method === 'eth_accounts') return ['0x1111111111111111111111111111111111111111'];
+      if (method === 'eth_chainId') return '0xc4cf';
+      window.__walletCalls++; throw Error(`Unexpected wallet method ${method}`);
+    } };
+  });
+  try {
+    await page.route('**/api/v1/trade/account?**', route => route.fulfill({ json: {
+      account, market: 'BTC-PERP', gasStt: '1', walletUsdso: '100', allowance: '0',
+      marginUnlocked: '50', withdrawable: '10', position: { sizeBtc: '0', entryPrice: '0' },
+      openOrders: [], block: '123',
+    } }));
+    await page.route('**/api/v1/trade/prepare', route => route.fulfill({ status: 503, json: {
+      code: 'READ_TIMEOUT', phase: 'direct wallet margin preview', retryable: true,
+      error: 'direct wallet margin preview: the upstream read timed out. No transaction was requested.',
+    } }));
+    await page.locator('#wallet-connect').click();
+    await page.waitForFunction(() => document.querySelector('#wallet-native-stt')?.textContent?.includes('1 STT'));
+    await page.locator('#quantity').fill('0.00013');
+    await page.locator('#use-bid').click();
+    await page.locator('#review-order').click();
+    await page.locator('#guard-decision').getByText('UNAVAILABLE').waitFor();
+    assert.equal(await page.locator('#guard-verdict').textContent(), 'UNKNOWN');
+    assert.match(await page.locator('#preflight-details').textContent(), /direct wallet margin preview/);
+    assert.match(await page.locator('#preflight-details').textContent(), /read-only review is safe/);
+    assert.equal(await page.locator('#confirm-wallet').isDisabled(), true);
+    assert.equal(await page.evaluate(() => window.__walletCalls), 0);
   } finally { await context.close(); }
 });
 

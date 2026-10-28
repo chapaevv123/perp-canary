@@ -25,9 +25,19 @@ import { explainGuard } from './guard-v2.js';
     '<span>Builder fee</span><strong>0 bps in calldata</strong>';
   panel.querySelector('.trade-facts').append(feeFacts);
   const feeNote = document.createElement('p'); feeNote.className = 'small';
-  feeNote.textContent = 'Exchange and funding fees are not quoted here. Review dreamDEX terms before trading.';
+  feeNote.textContent = 'Official testnet docs list 0 maker/taker fees. Funding and final gas depend on chain state; no fee or PnL estimate is certified by this ticket.';
   panel.querySelector('.trade-facts').after(feeNote);
   $('sell').title = 'SELL PostOnly can open or add to a short; this is not reduce-only.';
+  const closeGuidance = document.createElement('p'); closeGuidance.className = 'small control-note';
+  closeGuidance.append('SELL / SHORT is a directional order, not a guaranteed close. For a verified reduce-only close, open the ',
+    Object.assign(document.createElement('a'), { href: 'https://app.testnet.dreamdex.io/',
+      target: '_blank', rel: 'noopener noreferrer', textContent: 'official dreamDEX Perps interface' }),
+    ' and use the current position in its Positions table.');
+  panel.querySelector('.side-switch').after(closeGuidance);
+  const marketRules = document.createElement('p'); marketRules.id = 'market-rules';
+  marketRules.className = 'small control-note'; marketRules.setAttribute('role', 'status');
+  marketRules.textContent = 'Exchange minimum, lot step and price tick are unavailable until verified market metadata loads.';
+  $('trade-error').after(marketRules);
   $('use-ask').title = 'Available for SELL PostOnly. For BUY it would cross the book.';
   $('copy-prepare').textContent = 'Copy separate owner CLI command';
   $('copy-prepare').classList.remove('primary');
@@ -98,6 +108,9 @@ import { explainGuard } from './guard-v2.js';
     <div class="wallet-journal"><strong>Canary AI Copilot</strong>
       <p>Unavailable: no model service is connected. Guard, Radar and sizing use disclosed deterministic checks; they do not generate AI advice.</p></div>`;
   panel.querySelector('.trade-facts').before(workflow);
+  const actionGuidance = document.createElement('p'); actionGuidance.id = 'action-prerequisites';
+  actionGuidance.className = 'small control-note'; actionGuidance.setAttribute('role', 'status');
+  $('review-action').after(actionGuidance);
   for (const selector of ['.account-mode', '.mode-explanation', '.wallet-summary'])
     panel.querySelector('.side-switch').before(workflow.querySelector(selector));
   const compactAccount = document.createElement('div'); compactAccount.className = 'compact-account';
@@ -257,26 +270,42 @@ import { explainGuard } from './guard-v2.js';
         !quantity ? 'Enter a valid quantity to review this order.' : 'Enter a valid limit price to review this order.';
     } else if (!connected()) {
       decision = 'NOT READY'; explanation = state.account ? 'Switch wallet to Somnia Hideki 50383.' : 'Connect a wallet to review this order.';
+    } else if (!accountVerified()) {
+      decision = 'UNAVAILABLE'; explanation = 'Selected account, market and permissions have not been verified. Refresh the account read before review.';
     } else if (/fresh TRUSTED quote/i.test(error)) {
       decision = 'UNAVAILABLE'; explanation = 'A fresh trusted book is required. Refresh the selected market and try again.';
     } else if (!$('trade-error').classList.contains('okay')) {
       decision = 'BLOCKED'; explanation = error || 'Correct the order parameters before review.';
     } else {
-      decision = 'READY FOR REVIEW'; explanation = 'Inputs are valid. Review will check current permissions, margin, gas and contract simulation.';
+      decision = 'INPUTS COMPLETE'; explanation = 'Inputs only. Run read-only review to verify permission, margin, gas and contract simulation.';
     }
-    text('guard-verdict', decision === 'NOT READY' ? 'INPUTS' : decision === 'READY FOR REVIEW' ? 'PREFLIGHT PENDING' : decision);
+    text('guard-verdict', decision === 'NOT READY' ? 'INPUTS' : decision === 'INPUTS COMPLETE' ? 'PREFLIGHT REQUIRED' : decision);
     $('guard-verdict').dataset.verdict = decision.replaceAll(' ', '_');
     text('guard-decision', decision);
     $('guard-decision').dataset.state = decision;
     text('guard-explanation', explanation);
     $('guard-checks').replaceChildren(); guardDetails.open = false;
-    $('review-order').disabled = decision !== 'READY FOR REVIEW' || state.busy || !!state.pendingHash || !!state.actionPending;
+    $('review-order').disabled = decision !== 'INPUTS COMPLETE' || state.busy || !!state.pendingHash || !!state.actionPending;
     $('review-order').title = $('review-order').disabled ? explanation : 'Run fresh Canary Guard checks and contract simulation; no transaction is sent.';
+  }
+  function failedGuard(unavailable, explanation) {
+    const decision = unavailable ? 'UNAVAILABLE' : 'BLOCKED';
+    text('guard-verdict', unavailable ? 'UNKNOWN' : 'RED');
+    $('guard-verdict').dataset.verdict = unavailable ? 'UNKNOWN' : 'RED';
+    text('guard-decision', decision); $('guard-decision').dataset.state = decision;
+    text('guard-explanation', explanation);
+    $('confirm-wallet').disabled = true; $('trade-review').hidden = true;
+    text('margin-preview', 'NOT_RUN'); text('gas-estimate', 'NOT_RUN');
   }
   $('guard-spread').onchange = () => { if (state.plan) renderGuardV2(state.plan.result, state.plan.input); };
   const validChain = () => state.chainId === 50383;
   const connected = () => !!state.account && validChain();
   const delegated = () => state.mode === 'DELEGATED_PERPS';
+  function accountVerified() {
+    return connected() && state.accountData?.account?.toLowerCase() === state.account.toLowerCase() &&
+      state.accountData.market === $('market-select').value &&
+      (!delegated() || state.accountData.owner?.toLowerCase() === embeddedAccount.toLowerCase());
+  }
   function accountSummary(data = null) {
     text('compact-account-name', delegated() ? 'Wallet 1' : state.account ? 'Direct wallet' : 'Connect wallet');
     text('compact-account-mode', delegated() ? 'Delegated Perps' : 'Direct Wallet');
@@ -341,12 +370,18 @@ import { explainGuard } from './guard-v2.js';
   }
   const request = async (url, options) => {
     const controller = new window.AbortController();
-    const timer = setTimeout(() => controller.abort(), 60000);
+    const timeoutMs = url.includes('/prepare') ? 120000 : 60000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try { const response = await fetch(url, { cache: 'no-store', signal: controller.signal, ...options });
       const body = await response.json();
       if (!response.ok) { const error = Error(body.error || `HTTP ${response.status}`);
-        error.code = body.code; error.readBlock = body.readBlock; throw error; }
+        error.code = body.code; error.phase = body.phase; error.retryable = body.retryable;
+        error.readBlock = body.readBlock; throw error; }
       return body;
+    } catch (error) {
+      if (error.name === 'AbortError') { const timeout = Error(`Read-only ${url.includes('/prepare') ? 'preflight' : 'account'} request timed out after ${timeoutMs / 1000} seconds. Check network status and retry the read; no wallet request was sent.`);
+        timeout.code = 'BROWSER_TIMEOUT'; timeout.phase = 'browser to server'; timeout.retryable = true; throw timeout; }
+      throw error;
     } finally { window.clearTimeout(timer); }
   };
   function clearPositionIntelligence(message) {
@@ -470,13 +505,35 @@ import { explainGuard } from './guard-v2.js';
   function invalidate() {
     state.plan = null; $('trade-review').hidden = true;
     $('confirm-wallet').disabled = true;
+    text('margin-preview', 'NOT_RUN'); text('gas-estimate', 'NOT_RUN');
     idleGuard();
     invalidateAction();
   }
   function invalidateAction() {
     state.actionPlan = null; $('action-review').hidden = true; $('confirm-action').disabled = true;
-    $('review-action').disabled = !connected() || state.busy || !!state.pendingHash || !!state.actionPending ||
-      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value);
+    const action = $('wallet-action').value, amount = $('action-amount').value.trim();
+    const data = state.accountData;
+    const amountAvailable = (value, required) => typeof value === 'string' && /^\d+(?:\.\d{1,18})?$/.test(value) &&
+      Number.isFinite(Number(value)) && Number(value) >= Number(required);
+    let reason = !connected() ? 'Connect the wallet on Hideki 50383.' :
+      !accountVerified() ? 'Selected account and market are not verified yet; refresh balances.' :
+        !amountAvailable(data.gasStt, '0.000000000000000001') ? 'Wallet/operator needs a verified STT balance for simulated gas.' : '';
+    if (!reason && delegated() && action !== 'CANCEL') reason = 'Delegated operator cannot approve, deposit or withdraw Wallet 1 funds. Use the official owner wallet interface.';
+    if (!reason && action === 'CANCEL') {
+      const id = $('action-order-id').value.trim();
+      if (!id || !data.openOrders?.some(order => order.id === id)) reason = 'Select a currently open order in the Orders tab before cancellation.';
+      else if (delegated() && !data.permissions?.cancel) reason = 'This operator lacks the cancelOrderFor grant for the selected pool.';
+    } else if (!reason) {
+      if (!/^\d+(?:\.\d{1,18})?$/.test(amount) || Number(amount) <= 0) reason = 'Enter a positive USDso amount (up to 18 decimals).';
+      else if (action === 'APPROVE' && typeof data.allowance !== 'string') reason = 'MarginBank allowance is unverified; refresh balances.';
+      else if (action === 'APPROVE' && amountAvailable(data.allowance, amount)) reason = 'Existing MarginBank allowance already covers this amount.';
+      else if (action === 'DEPOSIT' && !amountAvailable(data.walletUsdso, amount)) reason = 'Wallet USDso balance is unavailable or below this deposit amount.';
+      else if (action === 'DEPOSIT' && !amountAvailable(data.allowance, amount)) reason = 'Approve this USDso amount before depositing.';
+      else if (action === 'WITHDRAW' && !amountAvailable(data.withdrawable, amount)) reason = 'Withdrawable MarginBank balance is unavailable or below this amount.';
+    }
+    text('action-prerequisites', reason || 'Prerequisites look available. Read-only review will recheck balances, permissions and simulation.');
+    $('review-action').disabled = !!reason || state.busy || !!state.pendingHash || !!state.actionPending;
+    $('review-action').title = reason || 'Run a fresh unsigned action review.';
   }
   function displayAccount() {
     $('wallet-connect').hidden = !!state.account;
@@ -522,6 +579,7 @@ import { explainGuard } from './guard-v2.js';
     const id = ++state.requestId;
     const selectedMarket = $('market-select').value;
     const selectedMode = state.mode;
+    state.accountData = null; accountSummary(); invalidate();
     text('wallet-balances', 'Reading selected market account (timeout 60 seconds)…');
     text('wallet-position', 'Reading selected market position and orders…');
     try { const url = delegated() ?
@@ -533,6 +591,8 @@ import { explainGuard } from './guard-v2.js';
         selectedMarket !== $('market-select').value) return;
       state.accountData = data;
       accountSummary(data);
+      idleGuard();
+      invalidateAction();
       text('wallet-balances', delegated() ?
         `Operator gas ${data.gasStt} STT · Wallet 1 free margin ${data.marginUnlocked} USDso · owner ${data.owner}` :
         `EOA gas ${data.gasStt} STT · wallet USDso ${data.walletUsdso} · allowance ${data.allowance ?? 'UNKNOWN'} · EOA free margin ${data.marginUnlocked}`);
@@ -569,7 +629,7 @@ import { explainGuard } from './guard-v2.js';
       }
       loadPositionIntelligence();
     } catch (error) { if (id === state.requestId) {
-      state.accountData = null; accountSummary(); text('wallet-balances', `Account read unavailable: ${error.message}`);
+      state.accountData = null; accountSummary(); idleGuard(); text('wallet-balances', `Account read unavailable: ${error.message}`);
       text('wallet-permissions', delegated() ? 'Delegated permissions UNKNOWN; trading blocked until retry.' :
         'Direct balance UNKNOWN; trading blocked until retry.');
       text('wallet-position', 'Position and open orders UNKNOWN. Use Refresh balances or Refresh live data to retry.');
@@ -855,8 +915,7 @@ import { explainGuard } from './guard-v2.js';
         draft.account.toLowerCase() === state.account.toLowerCase()) {
         await loadAccount(); $('load-order-history').click();
       } }
-    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending ||
-      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value); }
+    finally { state.busy = false; if (!state.actionPlan) invalidateAction(); else $('review-action').disabled = true; }
   };
   $('dismiss-action').onclick = () => { invalidateAction(); actionStatus('Wallet action review closed.'); };
   $('confirm-action').onclick = async () => {
@@ -913,8 +972,7 @@ import { explainGuard } from './guard-v2.js';
       if (error.code === 'ORDER_NOT_OPEN' && connected() && delegated()) {
         await loadAccount(); $('load-order-history').click();
       } }
-    finally { state.busy = false; $('review-action').disabled = !connected() || !!state.pendingHash || !!state.actionPending ||
-      ($('wallet-action').value === 'CANCEL' && !$('action-order-id').value);
+    finally { state.busy = false; invalidateAction();
       $('review-order').disabled = !connected() || !!state.pendingHash || !!state.actionPending; }
   };
   $('refresh').addEventListener('click', async () => {
@@ -956,11 +1014,11 @@ import { explainGuard } from './guard-v2.js';
     text('guard-verdict', 'CHECKING');
     text('guard-explanation', 'Checking fresh market, account, margin, gas and contract simulation…');
     status('Running Canary Trade Guard and contract simulation…');
-    const draft = input();
+    const draft = input(), accountReadId = state.requestId;
     try {
       const plan = await request(prepareUrl(), { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(draft) });
-      if (!connected() || draft.account.toLowerCase() !== state.account.toLowerCase() ||
+      if (!accountVerified() || accountReadId !== state.requestId || draft.account.toLowerCase() !== state.account.toLowerCase() ||
         draft.market !== $('market-select').value || JSON.stringify(draft) !== JSON.stringify(input()) ||
         draft.side !== state.side || draft.price !== $('limit-price').value.trim() ||
         draft.quantity !== $('quantity').value.trim()) throw Error('Wallet or order changed during review. Start again.');
@@ -968,11 +1026,14 @@ import { explainGuard } from './guard-v2.js';
       $('guard-verdict').dataset.verdict = plan.guard.verdict;
       const guardView = renderGuardV2(plan, draft);
       text('margin-preview', plan.marginPreview?.status === 'OK' ?
-        `${plan.marginPreview.lockUsdso} USDso lock · ${plan.marginPreview.initialRequirementUsdso} USDso initial requirement` :
+        `At block ${plan.marginPreview.asOfBlock}: this order locks ${displayNumber(plan.marginPreview.lockUsdso)} USDso; existing positions need ${displayNumber(plan.marginPreview.initialRequirementUsdso)} USDso initial margin; wallet top-up ${displayNumber(plan.marginPreview.topUpUsdso ?? '0')} USDso` :
         plan.marginPreview ? 'UNPRICEABLE' : 'NOT_RUN');
       text('gas-estimate', plan.transaction ? `${plan.transaction.maxGasCostStt} STT maximum at observed gas price` : 'NOT_RUN');
       if (plan.status !== 'READY' || !plan.transaction || guardView.decision === 'BLOCKED' ||
-        guardView.decision === 'UNAVAILABLE') { status('Order blocked by Canary Trade Guard.', 'error'); return; }
+        guardView.decision === 'UNAVAILABLE') {
+        const reason = plan.guard.blockers?.[0] || plan.marginPreview?.reasons?.[0] || guardView.nextAction || 'A mandatory check did not pass.';
+        status(`Order blocked: ${reason}`, 'error'); return;
+      }
       state.plan = { input: draft, result: plan };
       text('review-details', `${delegated() ? `Wallet 1 ${embeddedAccount} via operator ${draft.account}` : `Direct EOA ${draft.account}`} · ${draft.side} ${draft.quantity} ${draft.market} @ ${draft.price} USDso · PostOnly · estimated notional ${
         (Number(plan.guard.notionalRaw) / 1e18).toFixed(2)} USDso`);
@@ -981,9 +1042,16 @@ import { explainGuard } from './guard-v2.js';
       text('review-calldata', `Exact ${delegated() ? 'placeOrderFor' : 'placeOrder'} calldata: ${plan.transaction.data}`);
       $('trade-review').hidden = false; $('confirm-wallet').disabled = false;
       status('Review the exact wallet order, then confirm explicitly.', 'ok');
-    } catch (error) { status(`Review unavailable: ${error.message}`, 'error'); invalidate();
-      text('guard-decision', 'UNAVAILABLE'); text('guard-explanation', `Fresh checks could not complete: ${error.message}. Retry after market and RPC recover.`); }
-    finally { state.busy = false; $('review-order').disabled = !connected() ||
+    } catch (error) {
+      invalidate();
+      const phase = error.phase ? ` during ${error.phase}` : '';
+      const reason = `Read-only review${phase} did not complete: ${error.message}`;
+      failedGuard(true, reason);
+      text('preflight-details', `${reason} ${error.retryable ? 'A new read-only review is safe after checking the connection.' : 'Check the account, market and inputs before reviewing again.'} No transaction was requested.`);
+      $('preflight-details').hidden = false;
+      status(`Review unavailable: ${reason}`, 'error');
+    }
+    finally { state.busy = false; $('review-order').disabled = !accountVerified() ||
       !$('trade-error').classList.contains('okay') || !!state.pendingHash || !!state.actionPending; }
   };
   $('dismiss-review').onclick = () => { invalidate(); status('Order review closed.'); };
@@ -1005,12 +1073,11 @@ import { explainGuard } from './guard-v2.js';
       const tx = fresh.transaction;
       const context = verdict.context;
       const details = `Limit ${context.limitPrice} USDso · fresh bid ${context.bid ?? 'UNKNOWN'} / ask ${context.ask ?? 'UNKNOWN'} · owner free margin ${context.marginUsdso ?? 'UNKNOWN'} USDso · place grant ${context.placeGrant === null ? 'UNKNOWN' : context.placeGrant ? 'ACTIVE' : 'REVOKED'} · simulation ${context.simulation} · fresh estimated max gas ${context.gasEstimateStt ?? 'UNKNOWN'} STT.`;
-      if (!verdict.ok || !connected()) {
+      if (!verdict.ok || !accountVerified()) {
         invalidate();
-        text('guard-verdict', 'RED'); $('guard-verdict').dataset.verdict = 'RED';
         const reasons = verdict.issues.map(issue => `${issue.field}: ${issue.reason}`);
-        if (!connected()) reasons.push('wallet: Account or network disconnected; connect and review again.');
-        text('guard-explanation', reasons.join(' '));
+        if (!accountVerified()) reasons.push('wallet: Selected account or network changed; refresh and review again.');
+        failedGuard(false, reasons.join(' '));
         text('preflight-details', `${reasons.join(' ')} ${details} Edit the order or start a fresh review; no transaction was requested.`);
         $('preflight-details').hidden = false;
         status(`Wallet trade stopped: ${reasons[0]}`, 'error'); return;
@@ -1055,14 +1122,15 @@ import { explainGuard } from './guard-v2.js';
           /market|book|PostOnly/i.test(error.message) ? 'book' : /margin|collateral/i.test(error.message) ? 'margin' :
             /grant|permission/i.test(error.message) ? 'permission' : /simulation|contract/i.test(error.message) ?
               'simulation' : 'preflight';
-        text('guard-verdict', 'RED'); $('guard-verdict').dataset.verdict = 'RED';
-        text('guard-explanation', `${field}: ${error.message}`);
-        text('preflight-details', `${field}: ${error.message} Selected limit ${reviewed.input.price} USDso. Fresh book, margin, grant and simulation are UNKNOWN because the preflight did not complete. Review again; no transaction was requested.`);
+        const unavailable = error.retryable === true || ['READ_FAILED', 'READ_TIMEOUT', 'RPC_TIMEOUT', 'RPC_READ_FAILED', 'BROWSER_TIMEOUT', 'REQUEST_REJECTED'].includes(error.code);
+        const phase = error.phase || field;
+        failedGuard(unavailable, `${phase}: ${error.message}`);
+        text('preflight-details', `Preflight ${unavailable ? 'UNAVAILABLE' : 'BLOCKED'} at ${phase}: ${error.message} Selected limit ${reviewed.input.price} USDso. Later checks are not verified. ${unavailable ? 'Retry only the read-only review after the upstream service recovers.' : 'Correct the reported condition and start a new review.'} No transaction was requested.`);
         $('preflight-details').hidden = false;
       }
       status(`Wallet trade stopped: ${error.message}`, 'error');
     }
-    finally { state.busy = false; $('review-order').disabled = !connected() ||
+    finally { state.busy = false; $('review-order').disabled = !accountVerified() ||
       !$('trade-error').classList.contains('okay') || !!state.pendingHash || !!state.actionPending; }
   };
   displayAccount(); loadMarkets();

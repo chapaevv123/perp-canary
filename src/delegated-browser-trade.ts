@@ -7,6 +7,8 @@ import { withSnapshotSdk } from './lifecycle.ts';
 import { readVerifiedMarket, verifiedMarket } from './market-registry.ts';
 import { RPC } from './rpc-health.ts';
 import { HIDEKI_BANK, KNOWN_EMBEDDED } from './wallet-funding.ts';
+import { TradeStageError, TradeUserError, tradeStage } from './trade-stage.ts';
+import { decodeExecutionError } from './execution-error-decoder.ts';
 
 export const DELEGATED_PLACE_ABI = parseAbi([
   'function placeOrderFor(address owner,bool isBid,uint64 userData,uint256 price,uint256 quantity,uint64 expireTimestampNs,uint8 orderType,uint8 selfMatchingOption,address builder,uint96 builderFeeBpsTimes1k) payable returns (bool success,uint128 orderId)',
@@ -58,18 +60,18 @@ async function withSdk<T>(work: (sdk: SomniaMarkets) => Promise<T>, timeoutMs = 
 }
 export async function readDelegatedAccount(rawOperator: string, marketId = 'BTC-PERP') {
   const operator = checked(rawOperator);
-  const selected = await verifiedMarket(marketId);
+  const selected = await tradeStage('market registry', () => verifiedMarket(marketId));
   const [registry, place, cancel, reduce, gas, ownerAccount] = await Promise.all([
-    client.readContract({ address: selected.pool, abi: permissionAbi,
-      functionName: 'getOperatorPermissionsRegistry' }),
-    client.readContract({ address: selected.pool, abi: permissionAbi,
-      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, PLACE] }),
-    client.readContract({ address: selected.pool, abi: permissionAbi,
-      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, CANCEL] }),
-    client.readContract({ address: selected.pool, abi: permissionAbi,
-      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, REDUCE] }),
-    client.getBalance({ address: operator }),
-    readDirectAccount(KNOWN_EMBEDDED, selected.id),
+    tradeStage('operator permission registry', () => client.readContract({ address: selected.pool, abi: permissionAbi,
+      functionName: 'getOperatorPermissionsRegistry' })),
+    tradeStage('placeOrderFor grant', () => client.readContract({ address: selected.pool, abi: permissionAbi,
+      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, PLACE] })),
+    tradeStage('cancelOrderFor grant', () => client.readContract({ address: selected.pool, abi: permissionAbi,
+      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, CANCEL] })),
+    tradeStage('reduceOrderFor grant', () => client.readContract({ address: selected.pool, abi: permissionAbi,
+      functionName: 'isOperatorAuthorized', args: [KNOWN_EMBEDDED, operator, REDUCE] })),
+    tradeStage('operator STT balance', () => client.getBalance({ address: operator })),
+    tradeStage('Wallet 1 MarginBank account and position', () => readDirectAccount(KNOWN_EMBEDDED, selected.id)),
   ]);
   if (registry.toLowerCase() !== REGISTRY.toLowerCase() ||
     ownerAccount.marginBank.toLowerCase() !== HIDEKI_BANK.toLowerCase())
@@ -97,13 +99,19 @@ export function delegatedGate(input: DelegatedInput, owner: string, placeAuthori
 export async function prepareDelegatedTrade(input: DelegatedInput) {
   const operator = checked(input.account);
   const marketId = input.market ?? 'BTC-PERP';
-  const [market, account] = await Promise.all([
-    readVerifiedMarket(marketId, true), readDelegatedAccount(operator, marketId),
+  const [selected, account] = await Promise.all([
+    tradeStage('market registry', () => verifiedMarket(marketId, true)),
+    tradeStage('delegated operator and Wallet 1 account', () => readDelegatedAccount(operator, marketId)),
   ]);
-  const price = /^\d+(?:\.\d+)?$/.test(input.price) ? parseUnits(input.price, market.market.quoteDecimals) : 0n;
-  const max = price > 0n ? await withSdk(async sdk => sdk.client.getMaxPerpOrderSize({
-    pool: market.market.pool, marginBank: market.market.marginBank,
-    account: KNOWN_EMBEDDED, isBid: input.side === 'BUY', price, autoPull: false })) : null;
+  let price = 0n;
+  if (/^\d+(?:\.\d+)?$/.test(input.price)) {
+    try { price = parseUnits(input.price, selected.quoteDecimals); }
+    catch { throw new TradeUserError(`Limit price exceeds the ${selected.quoteDecimals}-decimal exchange precision.`); }
+  }
+  const max = price > 0n ? await tradeStage('Wallet 1 maximum placeable size', () => withSdk(async sdk => sdk.client.getMaxPerpOrderSize({
+    pool: selected.pool, marginBank: selected.marginBank,
+    account: KNOWN_EMBEDDED, isBid: input.side === 'BUY', price, autoPull: false }))).catch(() => null) : null;
+  const market = await tradeStage('fresh selected-market book and metadata', () => readVerifiedMarket(marketId, true));
   const observation: TradeObservation = { chainId: market.chainId, observedAt: market.observedAt,
     block: market.block, pool: account.pool, expectedPool: market.market.pool, marginBank: account.marginBank,
     book: market.book, depth: market.depth, mark: market.mark, grid: market.grid,
@@ -111,7 +119,7 @@ export async function prepareDelegatedTrade(input: DelegatedInput) {
       marginUnlockedRaw: account.marginUnlockedRaw,
       maxQuantityRaw: max?.priceable ? max.maxQuantity.toString() : null,
       maxPriceable: max?.priceable ?? false, maxPlaceable: !!max?.priceable && max.placeable,
-      limitedBy: max?.priceable ? max.limitedBy : 'STALE_MARK' } };
+      limitedBy: max?.priceable ? max.limitedBy : max ? 'STALE_MARK' : 'MAX_SIZE_READ_UNAVAILABLE' } };
   const base = assessDirectTrade(input, observation);
   const blockers = [...base.blockers, ...delegatedGate(input, account.owner, account.permissions.place)];
   const guard = { ...base, blockers,
@@ -119,17 +127,28 @@ export async function prepareDelegatedTrade(input: DelegatedInput) {
     verdict: blockers.length ? 'RED' as const : 'AMBER' as const };
   if (blockers.length || !guard.priceRaw || !guard.quantityRaw)
     return { status: 'BLOCKED' as const, guard, observation, account, transaction: null };
-  const preview = await withSdk(async sdk => sdk.client.previewPerpOrderMargin({
+  const preview = await tradeStage('Wallet 1 margin preview', () => withSdk(async sdk => sdk.client.previewPerpOrderMargin({
     pool: market.market.pool, marginBank: market.market.marginBank, account: KNOWN_EMBEDDED,
-    isBid: input.side === 'BUY', price: BigInt(guard.priceRaw!), quantity: BigInt(guard.quantityRaw!) }));
+    isBid: input.side === 'BUY', price: BigInt(guard.priceRaw!), quantity: BigInt(guard.quantityRaw!), autoPull: false })));
+  const marginReasons = !preview.priceable ? ['Current mark is stale or unavailable; margin cannot be priced.'] : [
+    !preview.hasCollateralForLock ? 'Wallet 1 free MarginBank collateral cannot cover this order lock; delegated calls cannot auto-pull.' : null,
+    !preview.meetsInitialMargin ? 'Wallet 1 equity would not meet initial margin after this order.' : null,
+    preview.voucherBlocked ? 'Paper USDso voucher rules block increasing this market position.' : null,
+    preview.restrictedBlocked ? 'Market is close-only for increasing orders.' : null,
+    preview.isolationBlocked ? 'Wallet 1 isolated account is bound to another market.' : null,
+  ].filter((reason): reason is string => reason !== null);
+  if (preview.priceable && !preview.sufficient && marginReasons.length === 0)
+    marginReasons.push('SDK margin preview rejected this exact Wallet 1 order; refresh account and market evidence.');
   const marginPreview = { status: preview.priceable ? 'OK' as const : 'UNPRICEABLE' as const,
     sufficient: preview.priceable && preview.sufficient,
     lockUsdso: preview.priceable ? formatUnits(preview.lockAmount, 18) : null,
     initialRequirementUsdso: preview.priceable ? formatUnits(preview.imRequirement, 18) : null,
+    topUpUsdso: preview.priceable ? formatUnits(preview.topUpRequired, 18) : null,
+    reasons: marginReasons,
     asOfBlock: preview.asOfBlock.toString() };
   if (!marginPreview.sufficient) return { status: 'BLOCKED' as const,
     guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
-      'Owner MarginBank preview cannot prove sufficient collateral for this delegated order'] },
+      ...marginReasons] },
     observation, account, marginPreview, transaction: null };
   const now = Date.now(), expiresAt = input.expiresAt ?? now + 300_000;
   if (!Number.isInteger(expiresAt) || expiresAt < now + 30_000 || expiresAt > now + 300_000)
@@ -139,12 +158,19 @@ export async function prepareDelegatedTrade(input: DelegatedInput) {
     BigInt(expiresAt) * 1_000_000n, 3, 0, ZERO, 0n] });
   let estimated: bigint;
   try { estimated = await client.estimateGas({ account: operator, to: market.market.pool, data, value: 0n }); }
-  catch (error) { return { status: 'BLOCKED' as const,
-    guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
-      `Delegated contract simulation failed: ${error instanceof Error ? error.message : 'UNKNOWN'}`] },
-    observation, account, marginPreview, transaction: null }; }
-  const [gasPrice, nonce] = await Promise.all([client.getGasPrice(),
-    client.getTransactionCount({ address: operator, blockTag: 'pending' })]);
+  catch (error) {
+    const decoded = decodeExecutionError(error, 'ESTIMATE_GAS');
+    if (decoded.errorClass !== 'CONTRACT_REVERT')
+      throw new TradeStageError('delegated contract simulation', 'READ_FAILED', true);
+    return { status: 'BLOCKED' as const,
+      guard: { ...guard, verdict: 'RED' as const, blockers: [...guard.blockers,
+        `${decoded.rootCause}. ${decoded.safeNextAction}`] },
+      observation, account, marginPreview, transaction: null };
+  }
+  const [gasPrice, nonce] = await Promise.all([
+    tradeStage('Hideki gas price', () => client.getGasPrice()),
+    tradeStage('operator pending nonce', () => client.getTransactionCount({ address: operator, blockTag: 'pending' })),
+  ]);
   const gasLimit = estimated * 12n / 10n;
   const cost = gasLimit * gasPrice;
   if (cost > 10n ** 17n || cost > BigInt(account.gasWei)) return { status: 'BLOCKED' as const,

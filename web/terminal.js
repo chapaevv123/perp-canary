@@ -133,6 +133,15 @@
   }
   function updatePreview() {
     const m = state.market, priceText = $('limit-price').value.trim(), quantityText = $('quantity').value.trim();
+    const rules = $('market-rules');
+    if (rules) {
+      const grid = m?.grid, base = m?.marketMeta?.base ?? $('market-select').value.replace('-PERP', '');
+      if (!grid || m?.book?.reasons?.includes('POOL_GRID_MISMATCH'))
+        rules.textContent = 'Exchange order grid is unavailable or differs from the pool. Refresh verified market metadata.';
+      else try {
+        rules.textContent = `Exchange minimum ${rawDecimal(BigInt(grid.minQuantityRaw), grid.baseDecimals)} ${base}; lot step ${rawDecimal(BigInt(grid.lotSizeRaw), grid.baseDecimals)} ${base}; price tick ${rawDecimal(BigInt(grid.tickSizeRaw), grid.quoteDecimals)} USDso. On-chain/SDK block ${m.block}. No separate minimum notional is verified. No custom application maximum applies unless enabled under Wallet & permissions.`;
+      } catch { rules.textContent = 'Exchange order grid could not be verified. Refresh the market.'; }
+    }
     state.tradeCommand = null;
     $('copy-prepare').disabled = true;
     $('trade-error').className = 'trade-error';
@@ -156,8 +165,11 @@
       const min = BigInt(m.grid.minQuantityRaw), ask = decimalRaw(m.book.ask, 18);
       const mark = decimalRaw(m.mark, 18);
       if (tick <= 0n || price % tick !== 0n) throw Error('Limit price must be on the market tick grid.');
-      if (lot <= 0n || quantity < min || quantity % lot !== 0n)
-        throw Error(`Quantity must be at least ${rawDecimal(min, m.grid.baseDecimals ?? 8)} ${m.marketMeta?.base ?? 'BTC'} and on the lot grid.`);
+      if (min <= 0n || lot <= 0n) throw Error('Exchange quantity grid is unavailable. Refresh the market.');
+      if (quantity < min)
+        throw Error(`Exchange minimum is ${rawDecimal(min, m.grid.baseDecimals ?? 8)} ${m.marketMeta?.base ?? $('market-select').value.replace('-PERP', '')} at verified block ${m.block}.`);
+      if (quantity % lot !== 0n)
+        throw Error(`Exchange lot step is ${rawDecimal(lot, m.grid.baseDecimals ?? 8)} ${m.marketMeta?.base ?? $('market-select').value.replace('-PERP', '')} at verified block ${m.block}.`);
       if (state.side === 'BUY' ? price >= ask : price <= decimalRaw(m.book.bid, 18))
         throw Error(`${state.side} PostOnly would cross the opposite book top.`);
       const deviation = price > mark ? price - mark : mark - price;
